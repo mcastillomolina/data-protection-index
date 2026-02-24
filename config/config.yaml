@@ -1,0 +1,43 @@
+# Main configuration file for Data Protection Index - Phase 1
+
+project:
+  name: "Data Protection Index"
+  version: "0.1.0"
+  phase: 1
+
+llm:
+  provider: "openai"  # Options: "openai", "anthropic"
+  model: "gpt-4-turbo-preview"
+  temperature: 0.3  # Lower for more consistent outputs
+  max_tokens: 2000
+  timeout: 30
+  max_retries: 3
+
+search:
+  provider: "serpapi"
+  max_results_per_query: 10
+  timeout: 15
+  rate_limit_delay: 1.0  # seconds between requests
+
+pipeline:
+  max_documents_per_country: 20
+  top_urls_per_document: 5
+  min_relevance_score: 6.0
+  enable_deduplication: true
+  enable_caching: true
+  cache_dir: "data/cache"
+
+output:
+  directory: "data/outputs"
+  save_intermediate: true
+  intermediate_dir: "intermediate"
+  format: "json"
+  pretty_print: true
+  include_metadata: true
+
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
+  file: "logs/discovery.log"
+  rotation: "10 MB"
+  retention: "1 week"
