@@ -1,0 +1,44 @@
+# Standard document types across all countries
+
+document_types:
+  - id: "constitution"
+    name: "Constitution"
+    description: "National constitution with privacy/data protection provisions"
+    priority: 10
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["constitution", "fundamental law", "charter"]
+
+  - id: "data_protection_law"
+    name: "Data Protection Law"
+    description: "Primary legislation governing data protection and privacy"
+    priority: 10
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["data protection", "privacy law", "personal data"]
+
+  - id: "dpa_reports"
+    name: "Data Protection Authority Reports"
+    description: "Annual reports, enforcement decisions, and statistics"
+    priority: 8
+    expected_file_types: ["pdf"]
+    common_keywords: ["annual report", "enforcement", "authority report"]
+
+  - id: "enforcement_records"
+    name: "Enforcement Records"
+    description: "Published fines, sanctions, and case decisions"
+    priority: 7
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["fines", "sanctions", "penalties", "enforcement actions"]
+
+  - id: "regulatory_guidance"
+    name: "Regulatory Guidance"
+    description: "Official guidance documents from DPA"
+    priority: 5
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["guidance", "guidelines", "recommendations"]
+
+  - id: "legislative_history"
+    name: "Legislative History"
+    description: "Parliamentary debates, amendments, explanatory notes"
+    priority: 3
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["legislative history", "parliamentary debate", "amendments"]
