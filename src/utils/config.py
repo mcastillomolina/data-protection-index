@@ -88,6 +88,7 @@ class Config:
 
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+        self.groq_api_key = os.getenv("GROQ_API_KEY")
         self.serpapi_key = os.getenv("SERPAPI_KEY")
 
         # Allow environment to override config path
@@ -162,6 +163,8 @@ class Config:
             raise ValueError("OPENAI_API_KEY not set in environment")
         if self.llm.provider == "anthropic" and not self.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY not set in environment")
+        if self.llm.provider == "groq" and not self.groq_api_key:
+            raise ValueError("GROQ_API_KEY not set in environment")
         if self.search.provider == "serpapi" and not self.serpapi_key:
             raise ValueError("SERPAPI_KEY not set in environment")
 
@@ -182,11 +185,29 @@ class Config:
         """
         from src.clients.openai_client import OpenAIClient
         from src.clients.anthropic_client import AnthropicClient
+        from src.clients.groq_client import GroqClient
 
         if self.llm.provider == "openai":
-            return OpenAIClient(self.openai_api_key, self.llm.model, self)
+            return OpenAIClient(
+                api_key=self.openai_api_key,
+                model=self.llm.model,
+                timeout=self.llm.timeout,
+                max_retries=self.llm.max_retries
+            )
         elif self.llm.provider == "anthropic":
-            return AnthropicClient(self.anthropic_api_key, self.llm.model, self)
+            return AnthropicClient(
+                api_key=self.anthropic_api_key,
+                model=self.llm.model,
+                timeout=self.llm.timeout,
+                max_retries=self.llm.max_retries
+            )
+        elif self.llm.provider == "groq":
+            return GroqClient(
+                api_key=self.groq_api_key,
+                model=self.llm.model,
+                timeout=self.llm.timeout,
+                max_retries=self.llm.max_retries
+            )
         else:
             raise ValueError(f"Unknown LLM provider: {self.llm.provider}")
 
@@ -199,4 +220,12 @@ class Config:
         """
         from src.clients.search_client import SearchClient
 
-        return SearchClient(self.search.provider, self.serpapi_key, self)
+        if self.search.provider == "serpapi":
+            return SearchClient(
+                provider=self.search.provider,
+                api_key=self.serpapi_key,
+                rate_limit_delay=self.search.rate_limit_delay,
+                timeout=self.search.timeout
+            )
+        else:
+            raise ValueError(f"Unknown search provider: {self.search.provider}")

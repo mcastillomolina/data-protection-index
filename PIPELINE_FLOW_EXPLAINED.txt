@@ -1,0 +1,299 @@
+═══════════════════════════════════════════════════════════════════════
+         DATA PROTECTION INDEX - PIPELINE FLOW EXPLAINED
+═══════════════════════════════════════════════════════════════════════
+
+INPUT TO THE SYSTEM:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Just the country name: "Chile"
+  
+  (Optional: Country metadata from config like official languages, 
+   government domains - helps but not required)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 1: DOCUMENT IDENTIFICATION (Initial Keywords Generated)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Prompt to LLM:
+┌─────────────────────────────────────────────────────────────────┐
+│ "You are a legal research expert specializing in data           │
+│ protection law. For the country Chile, identify all relevant    │
+│ legal documents related to data protection, privacy rights,     │
+│ and personal data processing.                                   │
+│                                                                  │
+│ Consider:                                                        │
+│ - Primary data protection laws                                  │
+│ - Constitutional provisions on privacy                          │
+│ - Regulatory guidance from data protection authorities          │
+│ - Sector-specific regulations                                   │
+│                                                                  │
+│ Return a JSON list with:                                        │
+│ - official_name (exact title)                                   │
+│ - document_type                                                 │
+│ - priority_score (1-10)                                         │
+│ - alternate_names                                               │
+│ - expected_language                                             │
+│                                                                  │
+│ Known documents for Chile:                                      │
+│ - Constitution: Constitución Política de la República de Chile  │
+│ - Data Protection Law: Ley 19.628 sobre Protección...          │
+│ - DPA: Consejo para la Transparencia                           │
+└─────────────────────────────────────────────────────────────────┘
+
+LLM Response (THE INITIAL KEYWORDS):
+┌─────────────────────────────────────────────────────────────────┐
+│ {                                                                │
+│   "documents": [                                                 │
+│     {                                                            │
+│       "official_name": "Ley 19.628 sobre Protección de la      │
+│                         Vida Privada",                          │
+│       "document_type": "data_protection_law",                   │
+│       "priority_score": 10,                                     │
+│       "alternate_names": [                                      │
+│         "Ley 19.628",                                          │
+│         "Ley de Protección de Datos Personales"               │
+│       ],                                                        │
+│       "expected_language": "es"                                │
+│     },                                                          │
+│     {                                                            │
+│       "official_name": "Constitución Política de la            │
+│                         República de Chile",                    │
+│       "document_type": "constitution",                         │
+│       "priority_score": 9,                                     │
+│       ...                                                       │
+│     }                                                            │
+│   ]                                                              │
+│ }                                                                │
+└─────────────────────────────────────────────────────────────────┘
+
+These document names ARE the initial keywords!
+      ↓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 2: QUERY GENERATION (Keywords → Search Queries)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For EACH document identified in Step 1, generate search queries.
+
+Prompt to LLM:
+┌─────────────────────────────────────────────────────────────────┐
+│ "You are a search expert. Create 3 optimized Google search     │
+│ queries to find:                                                │
+│                                                                  │
+│ Document: Ley 19.628 sobre Protección de la Vida Privada      │
+│ Country: Chile                                                  │
+│ Language: Spanish                                               │
+│ Government domains: .gob.cl, .cl                               │
+│                                                                  │
+│ Strategies:                                                     │
+│ - Use site: restrictions for official sources                  │
+│ - Include exact document names and codes                       │
+│ - Add PDF/HTML file type hints                                 │
+│ - Mix Spanish and English terms                                │
+│ - Use alternate names                                           │
+│                                                                  │
+│ Return JSON with:                                               │
+│ - query_text                                                    │
+│ - priority (1-10)                                              │
+│ - site_restriction (if any)                                    │
+│ - expected_file_type (if any)                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+LLM Response (SEARCH QUERIES):
+┌─────────────────────────────────────────────────────────────────┐
+│ {                                                                │
+│   "queries": [                                                   │
+│     {                                                            │
+│       "query_text": "Chile Ley 19.628 texto completo          │
+│                      site:.gob.cl",                            │
+│       "priority": 10,                                          │
+│       "site_restriction": ".gob.cl"                           │
+│     },                                                          │
+│     {                                                            │
+│       "query_text": "Ley 19628 protección datos personales    │
+│                      Chile",                                    │
+│       "priority": 9                                            │
+│     },                                                          │
+│     {                                                            │
+│       "query_text": "Ley 19628 PDF download",                │
+│       "priority": 8,                                           │
+│       "expected_file_type": "pdf"                             │
+│     }                                                            │
+│   ]                                                              │
+│ }                                                                │
+└─────────────────────────────────────────────────────────────────┘
+      ↓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 3: WEB SEARCH (Execute Queries)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For each query, call SerpAPI (Google Search):
+
+Query 1: "Chile Ley 19.628 texto completo site:.gob.cl"
+   → Returns ~10 URLs from Google
+
+Query 2: "Ley 19628 protección datos personales Chile"  
+   → Returns ~10 URLs from Google
+
+Query 3: "Ley 19628 PDF download"
+   → Returns ~10 URLs from Google
+
+Total: ~30 URLs collected per document
+With deduplication: ~20 unique URLs per document
+
+Example results:
+┌─────────────────────────────────────────────────────────────────┐
+│ [                                                                │
+│   {                                                              │
+│     "url": "https://www.bcn.cl/leychile/navegar?idNorma=141599",│
+│     "title": "LEY-19628 - Ley sobre Protección...",           │
+│     "snippet": "Texto completo de la Ley 19.628...",          │
+│     "position": 1,                                             │
+│     "source_domain": "bcn.cl"                                  │
+│   },                                                             │
+│   {                                                              │
+│     "url": "https://www.leychile.cl/Navegar?idNorma=141599",  │
+│     "title": "Ley 19628 sobre Protección...",                │
+│     ...                                                         │
+│   },                                                             │
+│   ... (18 more URLs)                                            │
+│ ]                                                                │
+└─────────────────────────────────────────────────────────────────┘
+      ↓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 4: RELEVANCE SCORING (Filter Top URLs)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For each URL, ask LLM to score relevance.
+
+Prompt to LLM:
+┌─────────────────────────────────────────────────────────────────┐
+│ "You are a legal research expert. Score the relevance of this  │
+│ search result for finding the document:                         │
+│                                                                  │
+│ Document: Ley 19.628 sobre Protección de la Vida Privada      │
+│ Country: Chile                                                  │
+│                                                                  │
+│ Search Result:                                                  │
+│ URL: https://www.bcn.cl/leychile/navegar?idNorma=141599       │
+│ Title: LEY-19628 - Ley sobre Protección de la Vida Privada    │
+│ Snippet: Texto completo de la Ley 19.628...                   │
+│ Domain: bcn.cl                                                 │
+│                                                                  │
+│ Score 0-10 based on:                                           │
+│ - Is this an official government source? (.gob.cl = +3)       │
+│ - Does it have the full legal text? (+2)                      │
+│ - Is it the primary/authoritative source? (+3)                │
+│ - Is the URL structure reliable? (+1)                         │
+│ - Match with document name? (+1)                              │
+│                                                                  │
+│ Return JSON with:                                               │
+│ - relevance_score (0-10)                                       │
+│ - is_likely_official (boolean)                                │
+│ - confidence (high/medium/low)                                │
+│ - reasoning (explanation)                                      │
+└─────────────────────────────────────────────────────────────────┘
+
+LLM Response (FOR EACH URL):
+┌─────────────────────────────────────────────────────────────────┐
+│ {                                                                │
+│   "relevance_score": 9.8,                                      │
+│   "is_likely_official": true,                                  │
+│   "confidence": "high",                                        │
+│   "reasoning": "Official legislative database (BCN) with       │
+│                 full legal text. Authoritative government      │
+│                 source (.gob.cl). Contains complete text of    │
+│                 the primary data protection law."              │
+│ }                                                                │
+└─────────────────────────────────────────────────────────────────┘
+
+After scoring all ~20 URLs:
+- Sort by relevance_score (highest first)
+- Keep top 5 URLs
+- Discard the rest
+      ↓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FINAL OUTPUT (What's in discovery_results_demo.json)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{
+  "country": { "name": "Chile", "iso_code": "CL", ... },
+  
+  "documents": [
+    {
+      "document": {                              ← FROM STEP 1
+        "official_name": "Ley 19.628...",       ← INITIAL KEYWORD
+        "document_type": "data_protection_law",
+        "priority_score": 10,
+        "alternate_names": ["Ley 19.628", ...]  ← MORE KEYWORDS
+      },
+      
+      "search_queries_used": [                   ← FROM STEP 2
+        {
+          "query_text": "Chile Ley 19.628 texto completo site:.gob.cl",
+          "priority": 10,
+          "site_restriction": ".gob.cl"
+        },
+        ...
+      ],
+      
+      "top_results": [                           ← FROM STEP 3 + 4
+        {
+          "search_result": {                     ← FROM STEP 3
+            "url": "https://www.bcn.cl/leychile/navegar?idNorma=141599",
+            "title": "LEY-19628 - Ley sobre Protección...",
+            "snippet": "Texto completo...",
+            "source_domain": "bcn.cl"
+          },
+          "relevance_score": 9.8,                ← FROM STEP 4
+          "is_likely_official": true,            ← FROM STEP 4
+          "confidence": "high",                  ← FROM STEP 4
+          "reasoning": "Official legislative..." ← FROM STEP 4
+        },
+        ... (4 more top URLs)
+      ]
+    },
+    ... (more documents)
+  ],
+  
+  "timestamp": "2026-02-26T14:23:45.000000",
+  "total_documents_identified": 3,               ← COUNT FROM STEP 1
+  "total_urls_found": 15,                        ← COUNT FROM STEP 4
+  "metadata": {
+    "llm_provider": "anthropic",
+    "llm_model": "claude-3-5-haiku-20241022",
+    "search_provider": "serpapi",
+    "processing_time_seconds": 187.5
+  }
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SUMMARY:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ Initial keywords = document.official_name (from Step 1)
+✓ Search queries = search_queries_used[] (from Step 2)
+✓ Search results = All URLs from Google (Step 3)
+✓ Final output = top_results[] (scored & filtered in Step 4)
+
+Everything in the JSON is output from the system!
+
+The ONLY input is: "Chile"
+
+The AI generates:
+1. Document names (keywords)
+2. Search queries
+3. Relevance scores
+4. Reasoning
+
+The Search API provides:
+- URLs from Google
+
