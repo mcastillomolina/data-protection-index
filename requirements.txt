@@ -6,6 +6,7 @@ pydantic
 # LLM Clients
 openai
 anthropic
+groq
 
 # Search
 google-search-results
