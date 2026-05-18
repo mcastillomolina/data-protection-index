@@ -116,6 +116,7 @@ class SearchClient:
                 else:
                     raise ValueError(f"Unsupported provider: {self.provider}")
 
+                results = self._deduplicate_results(results)
                 logger.info(f"Search completed: '{query[:50]}...' returned {len(results)} results")
                 return results
 
@@ -200,7 +201,6 @@ class SearchClient:
         self,
         queries: List[str],
         num_results: int = 10,
-        deduplicate: bool = True,
         **kwargs
     ) -> Dict[str, List[Dict]]:
         """
@@ -209,7 +209,6 @@ class SearchClient:
         Args:
             queries: List of search query strings
             num_results: Number of results per query
-            deduplicate: Whether to remove duplicate URLs across queries
             **kwargs: Additional search parameters
 
         Returns:
@@ -222,11 +221,6 @@ class SearchClient:
 
             try:
                 results = self.search(query, num_results, **kwargs)
-
-                # Deduplicate if enabled
-                if deduplicate:
-                    results = self._deduplicate_results(results)
-
                 all_results[query] = results
 
             except Exception as e:

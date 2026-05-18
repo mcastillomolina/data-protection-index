@@ -56,3 +56,4 @@ htmlcov/
 # Outputs (optional - uncomment if you don't want to commit results)
 # data/outputs/
 /garbage/
+/claude/
