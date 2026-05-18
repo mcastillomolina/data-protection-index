@@ -19,6 +19,7 @@ from typing import Optional
 from loguru import logger
 
 from src.core import DocumentIdentifier, QueryGenerator, SearchExecutor, RelevanceFilter
+from src.core.country_resolver import resolve_country
 from src.models.country import Country
 from src.models.document import DocumentWithResults, DiscoveryOutput
 from src.utils.config import Config
@@ -65,26 +66,9 @@ def discover_documents_for_country(
     logger.info(f"Starting document discovery for: {country_name}")
     logger.info("="*60)
 
-    # Load country metadata
-    country_metadata = config.get_country_metadata(country_name)
-    if not country_metadata:
-        logger.warning(f"Country '{country_name}' not in config, using defaults")
-        country_metadata = {
-            "name": country_name,
-            "iso_code": "",
-            "official_languages": ["en"],
-            "government_domains": [],
-            "region": "Unknown"
-        }
-
-    country = Country(
-        name=country_metadata["name"],
-        iso_code=country_metadata.get("iso_code", ""),
-        official_languages=country_metadata.get("official_languages", ["en"]),
-        government_domains=country_metadata.get("government_domains", []),
-        region=country_metadata.get("region", ""),
-        metadata=country_metadata
-    )
+    # Resolve country from config, or enrich via LLM and cache if not found
+    country = resolve_country(country_name, config)
+    country_metadata = country.metadata
 
     logger.info(f"Country: {country.name} ({country.iso_code})")
     logger.info(f"Languages: {', '.join(country.official_languages)}")

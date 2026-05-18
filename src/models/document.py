@@ -5,6 +5,8 @@ from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field
 
+from src.models.country import Country
+
 
 class DocumentMetadata(BaseModel):
     """Metadata about a document to discover."""
@@ -137,8 +139,7 @@ class DocumentWithResults(BaseModel):
 class DiscoveryOutput(BaseModel):
     """Complete output from document discovery pipeline."""
 
-    country_name: str = Field(..., description="Name of the country")
-    country_metadata: Dict[str, Any] = Field(..., description="Country metadata")
+    country: Country = Field(..., description="Country being analyzed")
     documents: List[DocumentWithResults] = Field(..., description="All discovered documents")
     timestamp: datetime = Field(default_factory=datetime.now, description="When discovery ran")
     total_documents_identified: int = Field(..., description="Number of documents identified")
@@ -150,8 +151,13 @@ class DiscoveryOutput(BaseModel):
 
         json_schema_extra = {
             "example": {
-                "country_name": "Chile",
-                "country_metadata": {"iso_code": "CL", "region": "Latin America"},
+                "country": {
+                    "name": "Chile",
+                    "iso_code": "CL",
+                    "official_languages": ["es"],
+                    "government_domains": [".gob.cl"],
+                    "region": "Latin America",
+                },
                 "documents": [],
                 "timestamp": "2024-02-11T10:00:00",
                 "total_documents_identified": 8,
