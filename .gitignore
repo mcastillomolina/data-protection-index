@@ -57,3 +57,5 @@ htmlcov/
 # data/outputs/
 /garbage/
 /claude/
+/data/outputs/
+/config/
