@@ -1,21 +1,6 @@
 # Country-specific metadata for document discovery
 
 countries:
-
-  - name: "Germany"
-    iso_code: "DE"
-    official_languages: ["de"]
-    government_domains: [".bund.de", ".de"]
-    region: "Europe"
-    known_documents:
-      constitution: "Grundgesetz für die Bundesrepublik Deutschland"
-      data_protection_law: "Bundesdatenschutzgesetz (BDSG)"
-      dpa: "Bundesbeauftragter für den Datenschutz (BfDI)"
-    search_hints:
-      - "gesetze-im-internet.de"
-      - "bfdi.bund.de"
-      - "bundestag.de"
-
   - name: Chile
     iso_code: CL
     official_languages:
@@ -31,3 +16,35 @@ countries:
     - Derecho a la Privacidad
     - Privacidad en Chile
     - Protección de Datos Personales
+
+  - name: Germany
+    iso_code: DE
+    official_languages:
+    - de
+    government_domains: []
+    region: Europe
+    known_documents:
+      dpa: Bundesbeauftragte für den Datenschutz und die Informationsfreiheit
+      data_protection_law: Bundesdatenschutzgesetz
+    search_hints:
+    - Datenschutz
+    - DSGVO
+    - BDSG
+    - Datenschutzgesetz
+    - EU-Datenschutz-Grundverordnung
+
+  - name: India
+    iso_code: IN
+    official_languages:
+    - en
+    government_domains: []
+    region: Asia
+    known_documents:
+      dpa: Data Protection Board of India
+      data_protection_law: Digital Personal Data Protection Act, 2023
+    search_hints:
+    - India data protection
+    - Digital Personal Data Protection Act
+    - Data Protection Board of India
+    - Indian data privacy laws
+    - Data protection regulations India

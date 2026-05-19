@@ -100,6 +100,8 @@ class Config:
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
         self.groq_api_key = os.getenv("GROQ_API_KEY")
+        self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+        self.mistral_api_key = os.getenv("MISTRAL_API_KEY")
         self.serpapi_key = os.getenv("SERPAPI_KEY")
 
         # Allow environment to override config path
@@ -177,6 +179,10 @@ class Config:
             raise ValueError("ANTHROPIC_API_KEY not set in environment")
         if self.llm.provider == "groq" and not self.groq_api_key:
             raise ValueError("GROQ_API_KEY not set in environment")
+        if self.llm.provider == "deepseek" and not self.deepseek_api_key:
+            raise ValueError("DEEPSEEK_API_KEY not set in environment")
+        if self.llm.provider == "mistral" and not self.mistral_api_key:
+            raise ValueError("MISTRAL_API_KEY not set in environment")
         if self.search.provider == "serpapi" and not self.serpapi_key:
             raise ValueError("SERPAPI_KEY not set in environment")
 
@@ -198,6 +204,8 @@ class Config:
         from src.clients.openai_client import OpenAIClient
         from src.clients.anthropic_client import AnthropicClient
         from src.clients.groq_client import GroqClient
+        from src.clients.deepseek_client import DeepSeekClient
+        from src.clients.mistral_client import MistralClient
 
         if self.llm.provider == "openai":
             return OpenAIClient(
@@ -216,6 +224,20 @@ class Config:
         elif self.llm.provider == "groq":
             return GroqClient(
                 api_key=self.groq_api_key,
+                model=self.llm.model,
+                timeout=self.llm.timeout,
+                max_retries=self.llm.max_retries
+            )
+        elif self.llm.provider == "deepseek":
+            return DeepSeekClient(
+                api_key=self.deepseek_api_key,
+                model=self.llm.model,
+                timeout=self.llm.timeout,
+                max_retries=self.llm.max_retries
+            )
+        elif self.llm.provider == "mistral":
+            return MistralClient(
+                api_key=self.mistral_api_key,
                 model=self.llm.model,
                 timeout=self.llm.timeout,
                 max_retries=self.llm.max_retries
