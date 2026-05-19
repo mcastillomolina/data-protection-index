@@ -56,6 +56,17 @@ class OutputConfig:
 
 
 @dataclass
+class RetrievalConfig:
+    """Phase 2 retrieval configuration."""
+
+    timeout: int
+    max_retries: int
+    retry_delay: float
+    min_text_length: int
+    user_agent: str
+
+
+@dataclass
 class LoggingConfig:
     """Logging configuration."""
 
@@ -109,6 +120,7 @@ class Config:
         self.search = SearchConfig(**config["search"])
         self.pipeline = PipelineConfig(**config["pipeline"])
         self.output = OutputConfig(**config["output"])
+        self.retrieval = RetrievalConfig(**config["retrieval"])
         self.logging = LoggingConfig(**config["logging"])
 
         # Allow environment variable to override log level
