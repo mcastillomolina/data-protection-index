@@ -29,6 +29,8 @@ class DeepSeekClient(LLMClient):
 
     # Pricing per 1M tokens (USD)
     PRICING = {
+        "deepseek-v4-flash": {"prompt": 0.14, "completion": 0.28},
+        "deepseek-v4-pro": {"prompt": 0.435, "completion": 0.87},
         "deepseek-chat": {"prompt": 0.27, "completion": 1.10},
         "deepseek-reasoner": {"prompt": 0.55, "completion": 2.19},
     }
