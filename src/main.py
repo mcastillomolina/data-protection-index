@@ -1,12 +1,18 @@
 """
-Main entry point for Phase 1: Document Discovery.
+Main entry point for the Data Protection Index pipeline.
 
-This module orchestrates the complete document discovery pipeline:
+Orchestrates Phase 1 (Document Discovery) and Phase 2 (Document Retrieval):
+
+Phase 1:
 1. Identify relevant documents for a country
 2. Generate search queries for each document
 3. Execute web searches
-4. Filter results by relevance
-5. Output top URLs per document
+4. Filter results by relevance → top URLs per document
+
+Phase 2:
+5. Download content from each discovered URL
+6. Extract clean text from PDFs and HTML pages
+7. Save structured text corpus for Phase 3
 """
 
 import argparse
@@ -19,9 +25,11 @@ from typing import Optional
 from loguru import logger
 
 from src.core import DocumentIdentifier, QueryGenerator, SearchExecutor, RelevanceFilter
+from src.core import DocumentRetriever, TextExtractor
 from src.core.country_resolver import resolve_country
 from src.models.country import Country
 from src.models.document import DocumentWithResults, DiscoveryOutput
+from src.models.retrieval import DocumentContent, RetrievedDocument, RetrievalOutput
 from src.utils.config import Config
 from src.utils.logger import setup_logger
 
@@ -288,6 +296,186 @@ def print_summary(output: DiscoveryOutput) -> None:
     print("\n" + "="*70 + "\n")
 
 
+def retrieve_documents_from_output(
+    discovery_output: DiscoveryOutput,
+    config: Config,
+    verbose: bool = False,
+) -> RetrievalOutput:
+    """
+    Phase 2: Download and extract text from the URLs discovered in Phase 1.
+
+    For each document, tries all top_results URLs in relevance order and uses
+    the first one that yields extractable text.
+
+    Args:
+        discovery_output: Phase 1 output with scored URLs per document
+        config: Configuration object
+        verbose: Whether verbose logging is enabled
+
+    Returns:
+        RetrievalOutput with extracted text per document
+    """
+    start_time = datetime.now()
+
+    logger.info("="*60)
+    logger.info("Phase 2: Document Retrieval & Text Extraction")
+    logger.info("="*60)
+
+    retriever = DocumentRetriever(
+        timeout=config.retrieval.timeout,
+        max_retries=config.retrieval.max_retries,
+        retry_delay=config.retrieval.retry_delay,
+        user_agent=config.retrieval.user_agent,
+    )
+    extractor = TextExtractor(min_text_length=config.retrieval.min_text_length)
+
+    retrieved_docs: list[RetrievedDocument] = []
+
+    docs_iter = discovery_output.documents
+    if verbose:
+        from tqdm import tqdm
+        docs_iter = tqdm(docs_iter, desc="Retrieving documents")
+
+    for doc_result in docs_iter:
+        doc = doc_result.document
+        attempted_urls = [r.search_result.url for r in doc_result.top_results]
+
+        if not attempted_urls:
+            logger.warning(f"No URLs for '{doc.official_name}' — skipping")
+            retrieved_docs.append(RetrievedDocument(
+                document=doc,
+                attempted_urls=[],
+                status="no_results",
+            ))
+            continue
+
+        logger.info(f"Retrieving '{doc.official_name}' ({len(attempted_urls)} URL(s))")
+
+        content: Optional[DocumentContent] = None
+        successful_url: Optional[str] = None
+
+        for url in attempted_urls:
+            result = retriever.retrieve(url)
+            if result is None:
+                continue
+
+            raw_bytes, content_type = result
+            text = extractor.extract(raw_bytes, content_type)
+
+            if text is not None:
+                content = DocumentContent(
+                    url=url,
+                    content_type=content_type,
+                    extracted_text=text,
+                    char_count=len(text),
+                    extraction_success=True,
+                )
+                successful_url = url
+                logger.info(f"✓ '{doc.official_name}' — {len(text):,} chars from {url}")
+                break
+            else:
+                logger.debug(f"Extraction yielded no usable text for {url}")
+
+        if content is None:
+            logger.warning(f"✗ All URLs failed for '{doc.official_name}'")
+
+        retrieved_docs.append(RetrievedDocument(
+            document=doc,
+            content=content,
+            successful_url=successful_url,
+            attempted_urls=attempted_urls,
+            status="success" if content else "failed",
+        ))
+
+    retriever.close()
+
+    successful = sum(1 for d in retrieved_docs if d.status == "success")
+    failed = sum(1 for d in retrieved_docs if d.status == "failed")
+    no_results = sum(1 for d in retrieved_docs if d.status == "no_results")
+
+    processing_time = (datetime.now() - start_time).total_seconds()
+
+    logger.info("\n" + "="*60)
+    logger.info("Retrieval complete!")
+    logger.info(f"Successful: {successful} | Failed: {failed} | No URLs: {no_results}")
+    logger.info(f"Processing time: {processing_time:.1f}s")
+    logger.info("="*60)
+
+    return RetrievalOutput(
+        country=discovery_output.country,
+        documents=retrieved_docs,
+        total_documents=len(retrieved_docs),
+        successful_retrievals=successful,
+        failed_retrievals=failed,
+        metadata={
+            "phase": "2",
+            "version": "1.0",
+            "processing_time_seconds": processing_time,
+            "min_text_length": config.retrieval.min_text_length,
+        },
+    )
+
+
+def save_retrieval_output(output: RetrievalOutput, output_dir: Path) -> Path:
+    """
+    Save retrieval output to JSON file.
+
+    Args:
+        output: RetrievalOutput object
+        output_dir: Directory to save output
+
+    Returns:
+        Path to saved file
+    """
+    country_dir = output_dir / output.country.name.replace(" ", "_")
+    country_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = output.timestamp.strftime("%Y%m%d_%H%M%S")
+    filename = f"retrieval_results_{timestamp}.json"
+    output_file = country_dir / filename
+
+    output_dict = output.model_dump(mode="json")
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(output_dict, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"Retrieval output saved to: {output_file}")
+
+    latest_file = country_dir / "retrieval_results_latest.json"
+    with open(latest_file, "w", encoding="utf-8") as f:
+        json.dump(output_dict, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"Latest retrieval output: {latest_file}")
+
+    return output_file
+
+
+def print_retrieval_summary(output: RetrievalOutput) -> None:
+    """Print a human-readable summary of retrieval results."""
+    print("\n" + "="*70)
+    print(f"RETRIEVAL SUMMARY: {output.country.name}")
+    print("="*70)
+
+    print(f"\n📊 Statistics:")
+    print(f"   Documents processed: {output.total_documents}")
+    print(f"   Successfully retrieved: {output.successful_retrievals}")
+    print(f"   Failed: {output.failed_retrievals}")
+    print(f"   Processing time: {output.metadata.get('processing_time_seconds', 0):.1f}s")
+
+    print(f"\n📄 Documents:")
+    for doc_result in output.documents:
+        doc = doc_result.document
+        status_icon = "✅" if doc_result.status == "success" else ("❌" if doc_result.status == "failed" else "⚠️")
+        print(f"\n   {status_icon} {doc.official_name}")
+        if doc_result.content:
+            print(f"      Source: {doc_result.content.content_type.upper()} — {doc_result.content.char_count:,} chars")
+            print(f"      URL: {doc_result.successful_url}")
+        elif doc_result.status == "failed":
+            print(f"      Tried {len(doc_result.attempted_urls)} URL(s) — all failed")
+
+    print("\n" + "="*70 + "\n")
+
+
 def _create_empty_output(country: Country, start_time: datetime) -> DiscoveryOutput:
     """Create an empty DiscoveryOutput for failed pipelines."""
     return DiscoveryOutput(
@@ -370,6 +558,11 @@ Examples:
         action="store_true",
         help="Don't save output to file (print only)"
     )
+    parser.add_argument(
+        "--discovery-only",
+        action="store_true",
+        help="Run Phase 1 only (skip document retrieval)"
+    )
 
     args = parser.parse_args()
 
@@ -399,13 +592,27 @@ Examples:
             verbose=args.verbose
         )
 
-        # Save output (unless disabled)
+        # Save Phase 1 output (unless disabled)
         if not args.no_save:
             output_file = save_discovery_output(output, output_dir)
-            print(f"\n✅ Results saved to: {output_file}")
+            print(f"\n✅ Discovery results saved to: {output_file}")
 
-        # Print summary
+        # Print Phase 1 summary
         print_summary(output)
+
+        # Phase 2: retrieve and extract text from discovered URLs
+        if not args.discovery_only:
+            retrieval_output = retrieve_documents_from_output(
+                discovery_output=output,
+                config=config,
+                verbose=args.verbose,
+            )
+
+            if not args.no_save:
+                retrieval_file = save_retrieval_output(retrieval_output, output_dir)
+                print(f"\n✅ Retrieval results saved to: {retrieval_file}")
+
+            print_retrieval_summary(retrieval_output)
 
         # Exit successfully
         sys.exit(0)

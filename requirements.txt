@@ -15,6 +15,11 @@ google-search-results
 httpx
 requests
 
+# Document processing
+pdfplumber
+beautifulsoup4
+lxml
+
 # Utilities
 python-dateutil
 tqdm
