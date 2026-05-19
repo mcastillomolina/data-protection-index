@@ -13,8 +13,8 @@ import json
 import time
 from typing import Any, Dict, Optional
 
-from mistralai import Mistral
-from mistralai.models import SDKError
+from mistralai.client import Mistral
+from mistralai.client.errors import SDKError
 from loguru import logger
 
 from .llm_client import LLMClient, LLMUsage
