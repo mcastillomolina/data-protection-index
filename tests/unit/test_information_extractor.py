@@ -93,7 +93,10 @@ class TestInformationExtractor:
             },
         ]
         extractor = InformationExtractor(llm)
-        sections = [_make_section(0, "A" * 200), _make_section(1, "B" * 200)]
+        sections = [
+            _make_section(0, "personal data rights and consent. " * 10),
+            _make_section(1, "data protection enforcement authority. " * 10),
+        ]
         retrieved = _make_retrieved_doc()
 
         _, aggregated = extractor.extract_document(retrieved, sections)
@@ -121,7 +124,8 @@ class TestInformationExtractor:
             "notes": None,
         })
         extractor = InformationExtractor(llm)
-        section = _make_section(text="Transitional provision. " * 20)
+        # Text must contain a signal term so the pre-filter passes; the LLM returns all-null
+        section = _make_section(text="Transitional data protection provision. " * 10)
         retrieved = _make_retrieved_doc()
 
         results, _ = extractor.extract_document(retrieved, [section])
@@ -131,7 +135,7 @@ class TestInformationExtractor:
         llm = MagicMock()
         llm.complete_json.side_effect = RuntimeError("LLM unavailable")
         extractor = InformationExtractor(llm)
-        section = _make_section(text="Some text. " * 20)
+        section = _make_section(text="Personal data processing rights. " * 10)
         retrieved = _make_retrieved_doc()
 
         results, aggregated = extractor.extract_document(retrieved, [section])
@@ -167,7 +171,7 @@ class TestInformationExtractor:
             "notes": None,
         })
         extractor = InformationExtractor(llm, min_section_chars=50)
-        section = _make_section(text="X" * 100)
+        section = _make_section(text="personal data rights and consent processing. " * 3)
         retrieved = _make_retrieved_doc()
 
         results, _ = extractor.extract_document(retrieved, [section])
@@ -184,8 +188,73 @@ class TestInformationExtractor:
             "penalties": [], "lawful_basis": [], "notes": None,
         })
         extractor = InformationExtractor(llm)
-        section = _make_section(text="Content. " * 30)
+        section = _make_section(text="personal data protection content. " * 15)
         retrieved = _make_retrieved_doc()
 
         results, _ = extractor.extract_document(retrieved, [section])
         assert results[0].processing_time_seconds >= 0.0
+
+    # ------------------------------------------------------------------
+    # Pre-filter behaviour
+    # ------------------------------------------------------------------
+
+    def test_prefilter_blocks_section_without_signal_terms(self):
+        llm = MagicMock()
+        extractor = InformationExtractor(llm)
+        # "Preamble." contains no privacy-domain signal terms
+        section = _make_section(text="Preamble. General introduction text. " * 10)
+        retrieved = _make_retrieved_doc()
+
+        results, _ = extractor.extract_document(retrieved, [section])
+
+        assert len(results) == 1
+        assert results[0].all_null is True
+        assert results[0].error_message == "pre-filter:no-signal"
+        llm.complete_json.assert_not_called()
+
+    def test_prefilter_passes_section_with_signal_term(self):
+        llm = self._make_llm({
+            "key_provisions": ["Right to access"],
+            "data_subject_rights": None,
+            "enforcement_body": None,
+            "penalties": None,
+            "lawful_basis": None,
+            "notes": None,
+        })
+        extractor = InformationExtractor(llm)
+        section = _make_section(text="personal data subject rights must be upheld. " * 5)
+        retrieved = _make_retrieved_doc()
+
+        results, _ = extractor.extract_document(retrieved, [section])
+
+        assert len(results) == 1
+        assert results[0].error_message != "pre-filter:no-signal"
+        llm.complete_json.assert_called_once()
+
+    def test_prefilter_mixed_sections(self):
+        """Only sections with signal terms go to LLM; others are recorded as blocked."""
+        llm = self._make_llm({
+            "key_provisions": ["Principle"],
+            "data_subject_rights": None,
+            "enforcement_body": None,
+            "penalties": None,
+            "lawful_basis": None,
+            "notes": None,
+        })
+        extractor = InformationExtractor(llm)
+        sections = [
+            _make_section(0, "personal data rights and consent. " * 5),  # passes
+            _make_section(1, "Preamble and introductory remarks only. " * 5),  # blocked
+            _make_section(2, "enforcement authority shall impose sanctions. " * 5),  # passes
+        ]
+        retrieved = _make_retrieved_doc()
+
+        results, _ = extractor.extract_document(retrieved, sections)
+
+        assert len(results) == 3
+        blocked = [r for r in results if r.error_message == "pre-filter:no-signal"]
+        passed = [r for r in results if r.error_message != "pre-filter:no-signal"]
+        assert len(blocked) == 1
+        assert blocked[0].section_index == 1
+        assert len(passed) == 2
+        assert llm.complete_json.call_count == 2
