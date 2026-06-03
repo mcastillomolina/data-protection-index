@@ -29,7 +29,7 @@ class RelevanceFilter:
         self,
         llm_client: LLMClient,
         temperature: float = 0.2,
-        max_tokens: int = 3000,
+        max_tokens: int = 4000,
         min_relevance_score: float = 6.0
     ):
         """

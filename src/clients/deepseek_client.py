@@ -150,6 +150,9 @@ class DeepSeekClient(LLMClient):
                     temperature=temperature,
                     max_tokens=max_tokens,
                     response_format={"type": "json_object"},
+                    # Disable thinking mode — V4-Flash defaults to thinking on,
+                    # which leaves message.content empty and breaks JSON parsing.
+                    extra_body={"thinking_budget_tokens": 0},
                     **kwargs
                 )
 
@@ -163,7 +166,10 @@ class DeepSeekClient(LLMClient):
                 usage.estimated_cost_usd = self._estimate_cost(usage)
                 self.log_usage(usage)
 
-                content = response.choices[0].message.content.strip()
+                content = (response.choices[0].message.content or "").strip()
+
+                if not content:
+                    raise ValueError("DeepSeek returned an empty response content")
 
                 if content.startswith("```"):
                     lines = content.split("\n")

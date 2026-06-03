@@ -1,0 +1,54 @@
+# Per-document-type field definitions for Phase 3 extraction.
+# Each document type specifies which fields are expected to be populated.
+# Fields not listed here are still extracted; this is a hint for completeness checks.
+
+document_types:
+  data_protection_law:
+    expected_fields:
+      - key_provisions
+      - data_subject_rights
+      - enforcement_body
+      - lawful_basis
+    optional_fields:
+      - penalties
+      - notes
+
+  constitution:
+    expected_fields:
+      - key_provisions
+      - data_subject_rights
+    optional_fields:
+      - enforcement_body
+      - penalties
+      - lawful_basis
+      - notes
+
+  regulation:
+    expected_fields:
+      - key_provisions
+      - lawful_basis
+    optional_fields:
+      - data_subject_rights
+      - enforcement_body
+      - penalties
+      - notes
+
+  enforcement_report:
+    expected_fields:
+      - enforcement_body
+      - penalties
+    optional_fields:
+      - key_provisions
+      - data_subject_rights
+      - lawful_basis
+      - notes
+
+  default:
+    expected_fields:
+      - key_provisions
+    optional_fields:
+      - data_subject_rights
+      - enforcement_body
+      - penalties
+      - lawful_basis
+      - notes
