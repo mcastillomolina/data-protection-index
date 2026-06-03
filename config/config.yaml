@@ -6,12 +6,14 @@ project:
   phase: 2
 
 llm:
-  provider: "groq"  # Options: "openai", "anthropic", "groq"
+  provider: "deepseek"  # Options: "openai", "anthropic", "groq", "deepseek", "mistral"
+  # deepseek models: deepseek-chat (DeepSeek-V3), deepseek-reasoner (DeepSeek-R1)
   # groq models (free tier): llama-3.3-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768, gemma2-9b-it
   # openai models: gpt-4o, gpt-4o-mini, gpt-4-turbo
   # anthropic models: claude-3-5-sonnet-20241022, claude-3-haiku-20240307
-  model: "llama-3.3-70b-versatile"
-  # model: "llama-3.1-8b-instant"
+  model: "deepseek-v4-flash"
+  # model: "deepseek-v4-pro"       # more capable, higher cost
+  # model: "llama-3.1-8b-instant"  # groq
   temperature: 0.3  # Lower for more consistent outputs
   max_tokens: 2000
   timeout: 30
@@ -45,6 +47,15 @@ retrieval:
   retry_delay: 2.0  # seconds between retry attempts
   min_text_length: 200  # minimum chars to consider extraction successful
   user_agent: "DataProtectionIndex/1.0"
+
+extraction:
+  llm_provider: "deepseek"               # or "anthropic" for larger docs
+  llm_model: "deepseek-v4-flash"         # DeepSeek-V4-Flash, fast and cost-efficient
+  # llm_provider: "groq"                 # or "anthropic" for larger docs
+  # llm_model: "llama-3.3-70b-versatile" # sections are small; Groq is sufficient
+  schema_file: "config/extraction_schema.yaml"
+  min_section_chars: 100                  # skip sections shorter than this
+  max_section_chars: 4000                 # split oversized paragraphs (Tier 3)
 
 logging:
   level: "INFO"  # DEBUG, INFO, WARNING, ERROR

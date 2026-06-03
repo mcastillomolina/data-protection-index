@@ -1,7 +1,8 @@
 """
 Main entry point for the Data Protection Index pipeline.
 
-Orchestrates Phase 1 (Document Discovery) and Phase 2 (Document Retrieval):
+Orchestrates Phase 1 (Document Discovery), Phase 2 (Document Retrieval),
+and Phase 3 (Information Extraction):
 
 Phase 1:
 1. Identify relevant documents for a country
@@ -12,7 +13,12 @@ Phase 1:
 Phase 2:
 5. Download content from each discovered URL
 6. Extract clean text from PDFs and HTML pages
-7. Save structured text corpus for Phase 3
+
+Phase 3:
+7. Detect language of each document
+8. Split into sections (three-tier regex)
+9. Extract structured fields via LLM (one call per section)
+10. Aggregate across sections and write to PostgreSQL + JSON
 """
 
 import argparse
@@ -27,9 +33,18 @@ from loguru import logger
 from src.core import DocumentIdentifier, QueryGenerator, SearchExecutor, RelevanceFilter
 from src.core import DocumentRetriever, TextExtractor
 from src.core.country_resolver import resolve_country
+from src.core.language_detector import LanguageDetector
+from src.core.section_splitter import SectionSplitter
+from src.core.information_extractor import InformationExtractor
+from src.db.writer import DatabaseWriter
 from src.models.country import Country
 from src.models.document import DocumentWithResults, DiscoveryOutput
 from src.models.retrieval import DocumentContent, RetrievedDocument, RetrievalOutput
+from src.models.extraction import (
+    SectionExtractionResult,
+    DocumentExtractionResult,
+    ExtractionOutput,
+)
 from src.utils.config import Config
 from src.utils.logger import setup_logger
 
@@ -157,6 +172,7 @@ def discover_documents_for_country(
     relevance_filter = RelevanceFilter(
         llm_client=llm_client,
         temperature=0.2,  # Lower for consistent scoring
+        max_tokens=config.llm.max_tokens,
         min_relevance_score=config.pipeline.min_relevance_score
     )
 
@@ -176,10 +192,11 @@ def discover_documents_for_country(
 
         logger.info(f"Scoring {len(results)} results for '{doc_id}'")
 
-        scored_results = relevance_filter.filter_results(
+        scored_results = relevance_filter.filter_results_batch(
             document=document,
             results=results,
             country_name=country.name,
+            batch_size=10,
             top_n=top_urls_per_document
         )
 
@@ -476,6 +493,256 @@ def print_retrieval_summary(output: RetrievalOutput) -> None:
     print("\n" + "="*70 + "\n")
 
 
+def extract_information_from_retrieval(
+    retrieval_output: RetrievalOutput,
+    config: Config,
+    db_writer: Optional[DatabaseWriter],
+    verbose: bool = False,
+) -> ExtractionOutput:
+    """
+    Phase 3: Extract structured information from retrieved documents.
+
+    For each successfully retrieved document:
+      1. Detect language (langdetect, no LLM)
+      2. Split into sections (three-tier regex, no LLM)
+      3. Extract fields via LLM (one call per section)
+      4. Aggregate across sections
+      5. Upsert to PostgreSQL (if db_writer provided) and return ExtractionOutput
+
+    Args:
+        retrieval_output: Phase 2 output with extracted text per document
+        config: Configuration object
+        db_writer: Optional DatabaseWriter; if None, skips DB writes
+        verbose: Whether verbose logging is enabled
+
+    Returns:
+        ExtractionOutput with extraction results per document
+    """
+    start_time = datetime.now()
+
+    logger.info("=" * 60)
+    logger.info("Phase 3: Information Extraction")
+    logger.info("=" * 60)
+
+    lang_detector = LanguageDetector()
+    section_splitter = SectionSplitter()
+    llm_client = config.get_extraction_llm_client()
+    extractor = InformationExtractor(
+        llm_client=llm_client,
+        min_section_chars=config.extraction.min_section_chars,
+    )
+
+    country = retrieval_output.country
+    country_id: Optional[int] = None
+    if db_writer:
+        country_id = db_writer.upsert_country(country)
+
+    doc_results: list[DocumentExtractionResult] = []
+    successful = 0
+    failed = 0
+
+    docs_iter = retrieval_output.documents
+    if verbose:
+        from tqdm import tqdm
+        docs_iter = tqdm(docs_iter, desc="Extracting documents")
+
+    for retrieved_doc in docs_iter:
+        doc = retrieved_doc.document
+        doc_start = datetime.now()
+
+        if retrieved_doc.status != "success" or retrieved_doc.content is None:
+            logger.warning(f"Skipping '{doc.official_name}' — no retrieved text")
+            doc_results.append(
+                DocumentExtractionResult(
+                    document=doc,
+                    detected_language="unknown",
+                    split_tier_used="none",
+                    total_sections=0,
+                    sections_with_signal=0,
+                    sections=[],
+                    aggregated_fields={},
+                    status="failed",
+                    error_message="No retrieved text from Phase 2",
+                    processing_time_seconds=0.0,
+                    llm_provider=config.extraction.llm_provider,
+                    llm_model=config.extraction.llm_model,
+                )
+            )
+            failed += 1
+            continue
+
+        text = retrieved_doc.content.extracted_text
+        logger.info(f"Processing '{doc.official_name}' ({len(text):,} chars)")
+
+        # Step 1: Detect language
+        detected_lang = lang_detector.detect(text)
+        logger.info(f"  Language: {detected_lang}")
+
+        # Step 2: Split into sections
+        sections = section_splitter.split(text, detected_lang)
+        tier_used = sections[0].tier_used if sections else "tier3"
+        logger.info(f"  Sections: {len(sections)} (tier={tier_used})")
+
+        # Step 3 + 4: Extract and aggregate
+        try:
+            section_results, aggregated = extractor.extract_document(retrieved_doc, sections)
+        except Exception as exc:
+            logger.error(f"Extraction failed for '{doc.official_name}': {exc}")
+            doc_results.append(
+                DocumentExtractionResult(
+                    document=doc,
+                    detected_language=detected_lang,
+                    split_tier_used=tier_used,
+                    total_sections=len(sections),
+                    sections_with_signal=0,
+                    sections=[],
+                    aggregated_fields={},
+                    status="failed",
+                    error_message=str(exc),
+                    processing_time_seconds=(datetime.now() - doc_start).total_seconds(),
+                    llm_provider=config.extraction.llm_provider,
+                    llm_model=config.extraction.llm_model,
+                )
+            )
+            failed += 1
+            continue
+
+        sections_with_signal = sum(1 for r in section_results if not r.all_null)
+        status = (
+            "success" if sections_with_signal > 0
+            else ("partial" if section_results else "failed")
+        )
+
+        elapsed = (datetime.now() - doc_start).total_seconds()
+
+        # Step 5: Upsert to DB
+        if db_writer and country_id is not None:
+            doc_id = db_writer.upsert_document(country_id, retrieved_doc, detected_lang)
+            for sr in section_results:
+                db_writer.upsert_section_extraction(
+                    doc_id, sr,
+                    llm_provider=config.extraction.llm_provider,
+                    llm_model=config.extraction.llm_model,
+                )
+            db_writer.upsert_document_extraction(
+                doc_id,
+                aggregated,
+                metadata={
+                    "total_sections": len(sections),
+                    "sections_with_signal": sections_with_signal,
+                    "split_tier_used": tier_used,
+                    "detected_language": detected_lang,
+                    "status": status,
+                },
+            )
+
+        doc_results.append(
+            DocumentExtractionResult(
+                document=doc,
+                detected_language=detected_lang,
+                split_tier_used=tier_used,
+                total_sections=len(sections),
+                sections_with_signal=sections_with_signal,
+                sections=section_results,
+                aggregated_fields=aggregated,
+                enforcement_authority=aggregated.get("enforcement_body"),
+                status=status,
+                processing_time_seconds=elapsed,
+                llm_provider=config.extraction.llm_provider,
+                llm_model=config.extraction.llm_model,
+            )
+        )
+
+        logger.info(
+            f"  Done '{doc.official_name}': {sections_with_signal}/{len(sections)} "
+            f"sections with signal ({elapsed:.1f}s)"
+        )
+        successful += 1 if status != "failed" else 0
+        failed += 1 if status == "failed" else 0
+
+    processing_time = (datetime.now() - start_time).total_seconds()
+
+    logger.info("\n" + "=" * 60)
+    logger.info("Extraction complete!")
+    logger.info(f"Successful: {successful} | Failed: {failed}")
+    logger.info(f"Processing time: {processing_time:.1f}s")
+    logger.info("=" * 60)
+
+    return ExtractionOutput(
+        country=country,
+        documents=doc_results,
+        total_documents=len(doc_results),
+        successful_extractions=successful,
+        failed_extractions=failed,
+        metadata={
+            "phase": "3",
+            "version": "1.0",
+            "llm_provider": config.extraction.llm_provider,
+            "llm_model": config.extraction.llm_model,
+            "processing_time_seconds": processing_time,
+        },
+    )
+
+
+def save_extraction_output(output: ExtractionOutput, output_dir: Path) -> Path:
+    """Save extraction output to JSON file."""
+    country_dir = output_dir / output.country.name.replace(" ", "_")
+    country_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = output.timestamp.strftime("%Y%m%d_%H%M%S")
+    filename = f"extraction_results_{timestamp}.json"
+    output_file = country_dir / filename
+
+    output_dict = output.model_dump(mode="json")
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(output_dict, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"Extraction output saved to: {output_file}")
+
+    latest_file = country_dir / "extraction_results_latest.json"
+    with open(latest_file, "w", encoding="utf-8") as f:
+        json.dump(output_dict, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"Latest extraction output: {latest_file}")
+    return output_file
+
+
+def print_extraction_summary(output: ExtractionOutput) -> None:
+    """Print a human-readable summary of extraction results."""
+    print("\n" + "=" * 70)
+    print(f"EXTRACTION SUMMARY: {output.country.name}")
+    print("=" * 70)
+
+    print(f"\n📊 Statistics:")
+    print(f"   Documents processed: {output.total_documents}")
+    print(f"   Successful: {output.successful_extractions}")
+    print(f"   Failed: {output.failed_extractions}")
+    print(f"   Processing time: {output.metadata.get('processing_time_seconds', 0):.1f}s")
+
+    print(f"\n📄 Documents:")
+    for doc_result in output.documents:
+        doc = doc_result.document
+        status_icon = "✅" if doc_result.status == "success" else (
+            "⚠️" if doc_result.status == "partial" else "❌"
+        )
+        print(f"\n   {status_icon} {doc.official_name}")
+        print(
+            f"      Lang: {doc_result.detected_language} | "
+            f"Tier: {doc_result.split_tier_used} | "
+            f"Sections: {doc_result.sections_with_signal}/{doc_result.total_sections} with signal"
+        )
+        if doc_result.enforcement_authority:
+            print(f"      Enforcement: {doc_result.enforcement_authority}")
+        agg = doc_result.aggregated_fields
+        if agg.get("key_provisions"):
+            print(f"      Key provisions: {len(agg['key_provisions'])}")
+        if agg.get("data_subject_rights"):
+            print(f"      Subject rights: {len(agg['data_subject_rights'])}")
+
+    print("\n" + "=" * 70 + "\n")
+
+
 def _create_empty_output(country: Country, start_time: datetime) -> DiscoveryOutput:
     """Create an empty DiscoveryOutput for failed pipelines."""
     return DiscoveryOutput(
@@ -563,6 +830,21 @@ Examples:
         action="store_true",
         help="Run Phase 1 only (skip document retrieval)"
     )
+    parser.add_argument(
+        "--skip-extraction",
+        action="store_true",
+        help="Run Phases 1 + 2 but skip Phase 3 information extraction"
+    )
+    parser.add_argument(
+        "--extraction-only",
+        action="store_true",
+        help="Run Phase 3 only (reads existing retrieval_results_latest.json)"
+    )
+    parser.add_argument(
+        "--skip-db",
+        action="store_true",
+        help="Skip PostgreSQL writes during Phase 3 (JSON output only)"
+    )
 
     args = parser.parse_args()
 
@@ -581,27 +863,44 @@ Examples:
         # Determine output directory
         output_dir = args.output_dir if args.output_dir else Path(config.output.directory)
 
-        # Run pipeline
-        output = discover_documents_for_country(
-            country_name=args.country,
-            config=config,
-            output_dir=output_dir,
-            max_documents=args.max_documents,
-            queries_per_document=args.queries_per_doc,
-            top_urls_per_document=args.top_urls,
-            verbose=args.verbose
-        )
+        # ------------------------------------------------------------------
+        # --extraction-only: skip Phases 1+2, load existing retrieval output
+        # ------------------------------------------------------------------
+        if args.extraction_only:
+            country_dir = output_dir / args.country.replace(" ", "_")
+            retrieval_file = country_dir / "retrieval_results_latest.json"
+            if not retrieval_file.exists():
+                logger.error(f"No retrieval output found at {retrieval_file}")
+                sys.exit(1)
 
-        # Save Phase 1 output (unless disabled)
-        if not args.no_save:
-            output_file = save_discovery_output(output, output_dir)
-            print(f"\n✅ Discovery results saved to: {output_file}")
+            with open(retrieval_file, encoding="utf-8") as f:
+                retrieval_data = json.load(f)
 
-        # Print Phase 1 summary
-        print_summary(output)
+            from src.models.retrieval import RetrievalOutput as _RO
+            retrieval_output = _RO.model_validate(retrieval_data)
 
-        # Phase 2: retrieve and extract text from discovered URLs
-        if not args.discovery_only:
+        else:
+            # Phase 1: discovery
+            output = discover_documents_for_country(
+                country_name=args.country,
+                config=config,
+                output_dir=output_dir,
+                max_documents=args.max_documents,
+                queries_per_document=args.queries_per_doc,
+                top_urls_per_document=args.top_urls,
+                verbose=args.verbose,
+            )
+
+            if not args.no_save:
+                output_file = save_discovery_output(output, output_dir)
+                print(f"\n✅ Discovery results saved to: {output_file}")
+
+            print_summary(output)
+
+            if args.discovery_only:
+                sys.exit(0)
+
+            # Phase 2: retrieval
             retrieval_output = retrieve_documents_from_output(
                 discovery_output=output,
                 config=config,
@@ -613,6 +912,34 @@ Examples:
                 print(f"\n✅ Retrieval results saved to: {retrieval_file}")
 
             print_retrieval_summary(retrieval_output)
+
+        # Phase 3: extraction
+        if not args.skip_extraction and not args.discovery_only:
+            import os
+            db_writer: Optional[DatabaseWriter] = None
+            if not args.skip_db:
+                dsn = os.getenv("DATABASE_URL")
+                if dsn:
+                    db_writer = DatabaseWriter(dsn)
+                    db_writer.ensure_schema()
+                else:
+                    logger.warning("DATABASE_URL not set — skipping DB writes")
+
+            extraction_output = extract_information_from_retrieval(
+                retrieval_output=retrieval_output,
+                config=config,
+                db_writer=db_writer,
+                verbose=args.verbose,
+            )
+
+            if db_writer:
+                db_writer.close()
+
+            if not args.no_save:
+                extraction_file = save_extraction_output(extraction_output, output_dir)
+                print(f"\n✅ Extraction results saved to: {extraction_file}")
+
+            print_extraction_summary(extraction_output)
 
         # Exit successfully
         sys.exit(0)

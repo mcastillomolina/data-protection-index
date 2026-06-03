@@ -67,6 +67,17 @@ class RetrievalConfig:
 
 
 @dataclass
+class ExtractionConfig:
+    """Phase 3 extraction configuration."""
+
+    llm_provider: str
+    llm_model: str
+    schema_file: str
+    min_section_chars: int
+    max_section_chars: int
+
+
+@dataclass
 class LoggingConfig:
     """Logging configuration."""
 
@@ -124,6 +135,7 @@ class Config:
         self.output = OutputConfig(**config["output"])
         self.retrieval = RetrievalConfig(**config["retrieval"])
         self.logging = LoggingConfig(**config["logging"])
+        self.extraction = ExtractionConfig(**config["extraction"])
 
         # Allow environment variable to override log level
         log_level = os.getenv("LOG_LEVEL")
@@ -244,6 +256,49 @@ class Config:
             )
         else:
             raise ValueError(f"Unknown LLM provider: {self.llm.provider}")
+
+    def get_extraction_llm_client(self):
+        """
+        Factory method to create the LLM client configured for Phase 3 extraction.
+
+        Uses the extraction-specific provider/model from config.
+        """
+        from src.clients.openai_client import OpenAIClient
+        from src.clients.anthropic_client import AnthropicClient
+        from src.clients.groq_client import GroqClient
+        from src.clients.deepseek_client import DeepSeekClient
+        from src.clients.mistral_client import MistralClient
+
+        provider = self.extraction.llm_provider
+        model = self.extraction.llm_model
+
+        if provider == "openai":
+            return OpenAIClient(
+                api_key=self.openai_api_key, model=model,
+                timeout=self.llm.timeout, max_retries=self.llm.max_retries,
+            )
+        elif provider == "anthropic":
+            return AnthropicClient(
+                api_key=self.anthropic_api_key, model=model,
+                timeout=self.llm.timeout, max_retries=self.llm.max_retries,
+            )
+        elif provider == "groq":
+            return GroqClient(
+                api_key=self.groq_api_key, model=model,
+                timeout=self.llm.timeout, max_retries=self.llm.max_retries,
+            )
+        elif provider == "deepseek":
+            return DeepSeekClient(
+                api_key=self.deepseek_api_key, model=model,
+                timeout=self.llm.timeout, max_retries=self.llm.max_retries,
+            )
+        elif provider == "mistral":
+            return MistralClient(
+                api_key=self.mistral_api_key, model=model,
+                timeout=self.llm.timeout, max_retries=self.llm.max_retries,
+            )
+        else:
+            raise ValueError(f"Unknown extraction LLM provider: {provider}")
 
     def get_search_client(self):
         """

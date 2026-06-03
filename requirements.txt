@@ -20,6 +20,10 @@ pdfplumber
 beautifulsoup4
 lxml
 
+# Phase 3 — database and language detection
+psycopg2-binary
+langdetect
+
 # Utilities
 python-dateutil
 tqdm
