@@ -1,12 +1,15 @@
-"""Country resolution: config lookup with LLM enrichment fallback."""
+"""Country resolution: DB lookup → YAML seed → pycountry → LLM enrichment."""
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import yaml
 from loguru import logger
 
 from src.models.country import Country
+
+if TYPE_CHECKING:
+    from src.db.writer import DatabaseWriter
 
 COUNTRIES_YAML_PATH = Path("config/countries.yaml")
 
@@ -52,36 +55,92 @@ _SYSTEM_PROMPT = (
 )
 
 
-def resolve_country(country_name: str, config) -> Country:
+def resolve_country(
+    country_name: str,
+    config,
+    db_writer: Optional["DatabaseWriter"] = None,
+) -> Country:
     """
-    Return a Country for country_name.
+    Return a Country for country_name using a four-step lookup.
 
-    Checks config/countries.yaml first (case-insensitive). If not found,
-    calls the configured LLM to enrich the entry, caches it back to the
-    YAML file, and returns the result.
+    1. DB name/alias lookup (when db_writer is provided).
+    2. YAML/in-memory seed lookup; opportunistically upserts to DB.
+    3. pycountry fuzzy lookup → ISO dedup against DB or YAML.
+    4. LLM enrichment as last resort; persists to DB (or YAML when --skip-db).
     """
-    metadata = _find_country(country_name, config._countries_data)
-    if metadata:
-        return _build_country(metadata)
+    # Step 1: DB lookup by name (ILIKE) or alias
+    if db_writer is not None:
+        db_meta = db_writer.find_country(country_name)
+        if db_meta:
+            logger.debug(f"Country '{country_name}' found in DB")
+            return _build_country(db_meta)
 
-    logger.info(f"Country '{country_name}' not found in config — enriching via LLM")
+    # Step 2: YAML / in-memory seed lookup
+    yaml_meta = _find_country(country_name, config._countries_data)
+    if yaml_meta:
+        logger.debug(f"Country '{country_name}' found in YAML seed")
+        country = _build_country(yaml_meta)
+        if db_writer is not None:
+            db_writer.upsert_country(country)
+            logger.debug(f"Seeded '{country_name}' to DB from YAML")
+        return country
+
+    # Step 3: pycountry fuzzy lookup → ISO code → DB or YAML dedup
+    iso = _resolve_iso_via_pycountry(country_name)
+    if iso:
+        if db_writer is not None:
+            db_meta = db_writer.find_country_by_iso(iso)
+            if db_meta:
+                logger.info(
+                    f"'{country_name}' resolved to '{db_meta['name']}' "
+                    f"via ISO {iso} — adding alias"
+                )
+                db_writer.add_alias(iso, country_name)
+                return _build_country(db_meta)
+        yaml_by_iso = _find_by_iso_code(iso, config._countries_data)
+        if yaml_by_iso:
+            logger.info(
+                f"'{country_name}' resolved to '{yaml_by_iso['name']}' "
+                f"via ISO {iso} in YAML"
+            )
+            return _build_country(yaml_by_iso)
+
+    # Step 4: LLM enrichment
+    logger.info(f"Country '{country_name}' not found anywhere — enriching via LLM")
     metadata = _enrich_via_llm(country_name, config)
 
-    # Before caching, check if a country with the same ISO code already exists
-    # (handles alternate names / localised spellings, e.g. "España" vs "Spain")
-    existing = _find_by_iso_code(metadata["iso_code"], config._countries_data)
-    if existing:
+    if db_writer is not None:
+        existing_db = db_writer.find_country_by_iso(metadata["iso_code"])
+        if existing_db:
+            logger.info(
+                f"'{country_name}' resolved to existing DB entry '{existing_db['name']}' "
+                f"via ISO {metadata['iso_code']} — adding alias"
+            )
+            db_writer.add_alias(metadata["iso_code"], country_name)
+            return _build_country(existing_db)
+        country = _build_country(metadata)
+        db_writer.upsert_country(country)
+        logger.info(f"Upserted new country '{country_name}' to DB")
+        return country
+
+    # --skip-db path: YAML ISO dedup + YAML cache (original behaviour)
+    existing_yaml = _find_by_iso_code(metadata["iso_code"], config._countries_data)
+    if existing_yaml:
         logger.info(
-            f"'{country_name}' resolved to existing entry '{existing['name']}' "
+            f"'{country_name}' resolved to existing entry '{existing_yaml['name']}' "
             f"via ISO code {metadata['iso_code']} — skipping cache"
         )
-        return _build_country(existing)
+        return _build_country(existing_yaml)
 
     logger.info(f"Caching new country entry for '{country_name}'")
     _cache_to_yaml(metadata)
     config._countries_data[metadata["name"]] = metadata
     return _build_country(metadata)
 
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
 
 def _find_country(country_name: str, countries_data: Dict[str, Any]) -> Optional[Dict]:
     """Case-insensitive name lookup in the loaded countries dict."""
@@ -99,6 +158,16 @@ def _find_by_iso_code(iso_code: str, countries_data: Dict[str, Any]) -> Optional
         if metadata.get("iso_code", "").upper() == upper:
             return metadata
     return None
+
+
+def _resolve_iso_via_pycountry(country_name: str) -> Optional[str]:
+    """Return ISO alpha-2 code via pycountry fuzzy search, or None on miss."""
+    try:
+        import pycountry
+        matches = pycountry.countries.search_fuzzy(country_name)
+        return matches[0].alpha_2
+    except LookupError:
+        return None
 
 
 def _enrich_via_llm(country_name: str, config) -> Dict[str, Any]:
@@ -135,6 +204,7 @@ def _enrich_via_llm(country_name: str, config) -> Dict[str, Any]:
             "data_protection_law": response.get("primary_law", ""),
         },
         "search_hints": response.get("search_keywords", []),
+        "aliases": [],
     }
 
 
@@ -148,20 +218,19 @@ def _build_country(metadata: Dict[str, Any]) -> Country:
         region=metadata.get("region", ""),
         known_documents=metadata.get("known_documents", {}),
         search_hints=metadata.get("search_hints", []),
+        aliases=metadata.get("aliases", []),
         metadata=metadata,
     )
 
 
 def _cache_to_yaml(metadata: Dict[str, Any]) -> None:
-    """Append a new country entry to countries.yaml."""
+    """Append a new country entry to countries.yaml (only used in --skip-db mode)."""
     entry_yaml = yaml.dump(
         [metadata],
         default_flow_style=False,
         allow_unicode=True,
         sort_keys=False,
     )
-    # yaml.dump([item]) produces "- key: val\n  key2: val2\n..."
-    # Indent by 2 spaces to nest under the top-level `countries:` list.
     indented = "\n".join("  " + line for line in entry_yaml.rstrip("\n").split("\n"))
 
     with open(COUNTRIES_YAML_PATH, "a", encoding="utf-8") as f:

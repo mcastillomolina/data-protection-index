@@ -174,12 +174,7 @@ class GroqClient(LLMClient):
                         lines = lines[:-1]
                     content = "\n".join(lines)
 
-                try:
-                    return json.loads(content)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse JSON response: {e}")
-                    logger.debug(f"Raw response: {content}")
-                    raise ValueError(f"Invalid JSON response from Groq: {e}")
+                return self._parse_json(content)
 
             except RateLimitError as e:
                 logger.warning(f"Rate limit hit (attempt {attempt + 1}/{self.max_retries}): {e}")

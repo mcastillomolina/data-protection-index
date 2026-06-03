@@ -110,7 +110,7 @@ class QueryGenerator:
                     site_restrictions = query_data.get("site_restrictions", [])
 
                     # Determine file type hint from query or restrictions
-                    file_type_hint = None
+                    file_type_hint = ""
                     query_string = query_data["query_string"]
                     if "PDF" in query_string.upper() or "filetype:pdf" in query_string.lower():
                         file_type_hint = "pdf"
@@ -273,7 +273,7 @@ class QueryGenerator:
                     query_string=query_data["query_string"],
                     document_id=document.official_name,
                     site_restrictions=query_data.get("site_restrictions", []),
-                    file_type_hint=None,
+                    file_type_hint="",
                     priority=query_data.get("priority", 5)
                 )
                 queries.append(query)

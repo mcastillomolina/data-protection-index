@@ -196,14 +196,8 @@ class OpenAIClient(LLMClient):
                 usage.estimated_cost_usd = self._estimate_cost(usage)
                 self.log_usage(usage)
 
-                # Parse JSON response
                 content = response.choices[0].message.content
-                try:
-                    return json.loads(content)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse JSON response: {e}")
-                    logger.debug(f"Raw response: {content}")
-                    raise ValueError(f"Invalid JSON response from OpenAI: {e}")
+                return self._parse_json(content)
 
             except RateLimitError as e:
                 logger.warning(f"Rate limit hit (attempt {attempt + 1}/{self.max_retries}): {e}")

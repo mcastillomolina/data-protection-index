@@ -7,6 +7,7 @@ from loguru import logger
 
 from src.clients.llm_client import LLMClient
 from src.core.section_splitter import DocumentSection
+from src.core.section_pre_filter import SectionPreFilter
 from src.models.extraction import SectionExtractionResult, DocumentExtractionResult
 from src.models.document import DocumentMetadata
 from src.models.retrieval import RetrievedDocument
@@ -27,6 +28,7 @@ class InformationExtractor:
     def __init__(self, llm_client: LLMClient, min_section_chars: int = 100) -> None:
         self._llm = llm_client
         self._min_section_chars = min_section_chars
+        self._pre_filter = SectionPreFilter()
 
     # ------------------------------------------------------------------
     # Public API
@@ -52,6 +54,20 @@ class InformationExtractor:
                 )
                 continue
 
+            if not self._pre_filter.passes(section.text):
+                logger.debug(f"Section {section.index}: pre-filter blocked (no signal terms)")
+                results.append(SectionExtractionResult(
+                    section_index=section.index,
+                    section_header=section.header,
+                    section_text_original=section.text,
+                    split_tier_used=section.tier_used,
+                    extracted_fields=None,
+                    all_null=True,
+                    processing_time_seconds=0.0,
+                    error_message="pre-filter:no-signal",
+                ))
+                continue
+
             result = self._extract_section(section)
             results.append(result)
 
@@ -72,7 +88,7 @@ class InformationExtractor:
                 system_prompt=SYSTEM_PROMPT,
                 schema=EXTRACTION_SCHEMA,
                 temperature=0,
-                max_tokens=2000,
+                max_tokens=4000,
             )
             elapsed = time.time() - start
             all_null = all(

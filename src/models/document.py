@@ -20,6 +20,10 @@ class DocumentMetadata(BaseModel):
     expected_file_types: List[str] = Field(
         default_factory=list, description="Expected file types (pdf, html, etc.)"
     )
+    criteria_ids: List[int] = Field(
+        default_factory=list,
+        description="PI criterion IDs (1–14) this document is evidence for",
+    )
 
     class Config:
         """Pydantic config."""

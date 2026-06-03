@@ -52,6 +52,7 @@ from src.utils.logger import setup_logger
 def discover_documents_for_country(
     country_name: str,
     config: Config,
+    db_writer: Optional[DatabaseWriter] = None,
     output_dir: Optional[Path] = None,
     max_documents: Optional[int] = None,
     queries_per_document: int = 5,
@@ -90,7 +91,7 @@ def discover_documents_for_country(
     logger.info("="*60)
 
     # Resolve country from config, or enrich via LLM and cache if not found
-    country = resolve_country(country_name, config)
+    country = resolve_country(country_name, config, db_writer=db_writer)
     country_metadata = country.metadata
 
     logger.info(f"Country: {country.name} ({country.iso_code})")
@@ -863,6 +864,17 @@ Examples:
         # Determine output directory
         output_dir = args.output_dir if args.output_dir else Path(config.output.directory)
 
+        # Initialise DB writer early so country resolution can use it
+        import os
+        db_writer: Optional[DatabaseWriter] = None
+        if not args.skip_db:
+            dsn = os.getenv("DATABASE_URL")
+            if dsn:
+                db_writer = DatabaseWriter(dsn)
+                db_writer.ensure_schema()
+            else:
+                logger.warning("DATABASE_URL not set — skipping DB writes")
+
         # ------------------------------------------------------------------
         # --extraction-only: skip Phases 1+2, load existing retrieval output
         # ------------------------------------------------------------------
@@ -884,6 +896,7 @@ Examples:
             output = discover_documents_for_country(
                 country_name=args.country,
                 config=config,
+                db_writer=db_writer,
                 output_dir=output_dir,
                 max_documents=args.max_documents,
                 queries_per_document=args.queries_per_doc,
@@ -915,16 +928,6 @@ Examples:
 
         # Phase 3: extraction
         if not args.skip_extraction and not args.discovery_only:
-            import os
-            db_writer: Optional[DatabaseWriter] = None
-            if not args.skip_db:
-                dsn = os.getenv("DATABASE_URL")
-                if dsn:
-                    db_writer = DatabaseWriter(dsn)
-                    db_writer.ensure_schema()
-                else:
-                    logger.warning("DATABASE_URL not set — skipping DB writes")
-
             extraction_output = extract_information_from_retrieval(
                 retrieval_output=retrieval_output,
                 config=config,

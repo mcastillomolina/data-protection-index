@@ -21,6 +21,9 @@ class Country(BaseModel):
     search_hints: List[str] = Field(
         default_factory=list, description="Helpful domains/sites for search"
     )
+    aliases: List[str] = Field(
+        default_factory=list, description="Alternate names and localised spellings"
+    )
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
     class Config:

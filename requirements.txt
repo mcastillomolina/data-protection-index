@@ -23,10 +23,12 @@ lxml
 # Phase 3 — database and language detection
 psycopg2-binary
 langdetect
+pycountry
 
 # Utilities
 python-dateutil
 tqdm
+json-repair
 
 # Logging
 loguru

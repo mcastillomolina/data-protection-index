@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import psycopg2  # type: ignore[import]
 import psycopg2.extras  # type: ignore[import]
@@ -58,11 +58,11 @@ class DatabaseWriter:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO countries (name, iso_code, region, languages)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO countries (name, iso_code, region, languages, aliases)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (iso_code) DO UPDATE
-                    SET name     = EXCLUDED.name,
-                        region   = EXCLUDED.region,
+                    SET name      = EXCLUDED.name,
+                        region    = EXCLUDED.region,
                         languages = EXCLUDED.languages
                 RETURNING id
                 """,
@@ -71,11 +71,59 @@ class DatabaseWriter:
                     country.iso_code,
                     country.region,
                     country.official_languages,
+                    country.aliases,
                 ),
             )
             row = cur.fetchone()
         conn.commit()
         return row[0]
+
+    def find_country(self, name: str) -> Optional[Dict[str, Any]]:
+        """Look up a country by name (case-insensitive) or alias. Returns metadata dict or None."""
+        conn = self._get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT name, iso_code, region, languages, aliases
+                FROM   countries
+                WHERE  name ILIKE %s
+                   OR  %s = ANY(aliases)
+                LIMIT 1
+                """,
+                (name, name),
+            )
+            row = cur.fetchone()
+        return _db_row_to_metadata(dict(row)) if row is not None else None
+
+    def find_country_by_iso(self, iso_code: str) -> Optional[Dict[str, Any]]:
+        """Look up a country by ISO 3166-1 alpha-2 code. Returns metadata dict or None."""
+        conn = self._get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT name, iso_code, region, languages, aliases
+                FROM   countries
+                WHERE  iso_code = %s
+                """,
+                (iso_code.upper(),),
+            )
+            row = cur.fetchone()
+        return _db_row_to_metadata(dict(row)) if row is not None else None
+
+    def add_alias(self, iso_code: str, alias: str) -> None:
+        """Append alias to the country's aliases array if not already present."""
+        conn = self._get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE countries
+                SET    aliases = array_append(aliases, %s)
+                WHERE  iso_code = %s
+                  AND  NOT (%s = ANY(aliases))
+                """,
+                (alias, iso_code.upper(), alias),
+            )
+        conn.commit()
 
     def upsert_document(
         self,
@@ -91,13 +139,14 @@ class DatabaseWriter:
                 """
                 INSERT INTO documents
                     (country_id, document_type, official_name, source_url,
-                     content_type, char_count, detected_language, retrieved_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                     content_type, char_count, detected_language, criteria_ids, retrieved_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (country_id, official_name) DO UPDATE
                     SET source_url        = EXCLUDED.source_url,
                         content_type      = EXCLUDED.content_type,
                         char_count        = EXCLUDED.char_count,
                         detected_language = EXCLUDED.detected_language,
+                        criteria_ids      = EXCLUDED.criteria_ids,
                         retrieved_at      = EXCLUDED.retrieved_at
                 RETURNING id
                 """,
@@ -109,6 +158,7 @@ class DatabaseWriter:
                     content.content_type if content else None,
                     content.char_count if content else None,
                     detected_language,
+                    doc.document.criteria_ids,
                     datetime.now(),
                 ),
             )
@@ -213,3 +263,17 @@ class DatabaseWriter:
             row = cur.fetchone()
         conn.commit()
         return row[0]
+
+
+def _db_row_to_metadata(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a DB countries row into the metadata dict shape expected by _build_country."""
+    return {
+        "name":               row["name"],
+        "iso_code":           row["iso_code"].strip(),
+        "official_languages": row.get("languages") or [],
+        "government_domains": [],
+        "region":             row.get("region") or "",
+        "known_documents":    {},
+        "search_hints":       [],
+        "aliases":            row.get("aliases") or [],
+    }

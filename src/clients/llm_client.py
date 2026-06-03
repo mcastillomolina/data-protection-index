@@ -5,10 +5,13 @@ This module defines the interface that all LLM client implementations must follo
 It includes methods for text generation, structured JSON responses, and usage tracking.
 """
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 import time
+
+from json_repair import repair_json
 from loguru import logger
 
 
@@ -138,6 +141,20 @@ class LLMClient(ABC):
         """Reset the usage statistics to zero."""
         self.total_usage = LLMUsage(model=self.model)
         logger.info(f"Reset usage statistics for {self.model}")
+
+    def _parse_json(self, content: str) -> Dict[str, Any]:
+        """Parse a JSON string, falling back to json-repair on decode errors."""
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse JSON, attempting repair: {e}")
+            repaired = repair_json(content, return_objects=True)
+            if repaired:
+                logger.debug("JSON repaired successfully")
+                return repaired
+            logger.error(f"Failed to parse JSON response: {e}")
+            logger.debug(f"Raw response: {content}")
+            raise ValueError(f"Invalid JSON response: {e}")
 
     def log_usage(self, usage: LLMUsage) -> None:
         """

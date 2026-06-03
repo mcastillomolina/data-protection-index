@@ -8,6 +8,7 @@ from typing import List, Optional
 from loguru import logger
 
 from src.clients.llm_client import LLMClient
+from src.core.criteria_mapper import get_criteria_ids
 from src.models.country import Country
 from src.models.document import DocumentMetadata
 from src.prompts.document_identification import (
@@ -101,14 +102,16 @@ class DocumentIdentifier:
             for doc_data in documents_data:
                 try:
                     # Create DocumentMetadata with required fields
+                    doc_type = doc_data["document_type"]
                     doc = DocumentMetadata(
-                        document_type=doc_data["document_type"],
+                        document_type=doc_type,
                         official_name=doc_data["official_name"],
                         description=doc_data["description"],
                         expected_language=doc_data["expected_language"],
                         priority_score=doc_data["priority_score"],
                         alternate_names=doc_data.get("alternate_names", []),
-                        expected_file_types=doc_data.get("expected_file_types", ["pdf", "html"])
+                        expected_file_types=doc_data.get("expected_file_types", ["pdf", "html"]),
+                        criteria_ids=get_criteria_ids(doc_type),
                     )
                     documents.append(doc)
                     logger.debug(
