@@ -89,6 +89,18 @@ class LoggingConfig:
     retention: str
 
 
+@dataclass
+class ScoringConfig:
+    """Phase 4 scoring and embedding configuration."""
+
+    cosine_similarity_threshold: float
+    max_sections_per_criterion: int
+    embedding_model: str
+    embedding_provider: str
+    embedding_dims: int = 768
+    ollama_base_url: str = "http://localhost:11434"
+
+
 class Config:
     """Main configuration class."""
 
@@ -137,6 +149,7 @@ class Config:
         self.retrieval = RetrievalConfig(**config["retrieval"])
         self.logging = LoggingConfig(**config["logging"])
         self.extraction = ExtractionConfig(**config["extraction"])
+        self.scoring = ScoringConfig(**config["scoring"])
 
         # Allow environment variable to override log level
         log_level = os.getenv("LOG_LEVEL")
@@ -300,6 +313,34 @@ class Config:
             )
         else:
             raise ValueError(f"Unknown extraction LLM provider: {provider}")
+
+    def get_embedding_client(self):
+        """
+        Factory method to create the embedding client for Phase 4 scoring.
+
+        Reads scoring.embedding_provider from config.
+        Supports "openai" and "ollama".
+        """
+        provider = self.scoring.embedding_provider
+
+        if provider == "openai":
+            from src.clients.openai_embedding_client import OpenAIEmbeddingClient
+            if not self.openai_api_key:
+                raise ValueError(
+                    "OPENAI_API_KEY not set — required for embedding_provider='openai'"
+                )
+            return OpenAIEmbeddingClient(
+                api_key=self.openai_api_key,
+                model=self.scoring.embedding_model,
+            )
+        elif provider == "ollama":
+            from src.clients.ollama_embedding_client import OllamaEmbeddingClient
+            return OllamaEmbeddingClient(
+                model=self.scoring.embedding_model,
+                base_url=self.scoring.ollama_base_url,
+            )
+        else:
+            raise ValueError(f"Unknown embedding provider: {provider}")
 
     def get_search_client(self):
         """

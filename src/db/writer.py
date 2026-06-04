@@ -8,7 +8,7 @@ import psycopg2  # type: ignore[import]
 import psycopg2.extras  # type: ignore[import]
 from loguru import logger
 
-from src.db.schema import ALL_STATEMENTS
+from src.db.schema import ALL_STATEMENTS, CREATE_VECTOR_EXTENSION
 from src.models.country import Country
 from src.models.extraction import SectionExtractionResult
 from src.models.retrieval import RetrievedDocument
@@ -43,10 +43,43 @@ class DatabaseWriter:
         """Run all CREATE TABLE IF NOT EXISTS statements."""
         conn = self._get_conn()
         with conn.cursor() as cur:
+            # pgvector extension must exist before vector columns can be created.
+            # Run it first so a missing extension surfaces with actionable instructions.
+            try:
+                cur.execute(CREATE_VECTOR_EXTENSION)
+                conn.commit()
+            except psycopg2.Error as e:
+                conn.rollback()
+                raise RuntimeError(
+                    "pgvector extension is not installed in this PostgreSQL instance.\n"
+                    "Fix: change the Docker image in docker-compose.yml from\n"
+                    "  'postgres:16-alpine'  →  'pgvector/pgvector:pg16'\n"
+                    "then run:  docker compose up -d --force-recreate"
+                ) from e
             for stmt in ALL_STATEMENTS:
                 cur.execute(stmt)
         conn.commit()
         logger.debug("Database schema ensured")
+
+    # ------------------------------------------------------------------
+    # Lookups
+    # ------------------------------------------------------------------
+
+    def get_country_id_by_name(self, country_name: str) -> Optional[int]:
+        """Return the DB id for a country by name (or alias), or None if not found."""
+        conn = self._get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id FROM countries
+                WHERE name = %s
+                   OR %s = ANY(aliases)
+                LIMIT 1
+                """,
+                (country_name, country_name),
+            )
+            row = cur.fetchone()
+        return row[0] if row else None
 
     # ------------------------------------------------------------------
     # Upserts

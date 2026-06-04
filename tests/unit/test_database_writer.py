@@ -85,8 +85,9 @@ class TestDatabaseWriter:
         writer = DatabaseWriter("postgresql://dpi:dpi@localhost:5433/dpi")
         writer.ensure_schema()
 
-        assert cursor.execute.call_count == len(ALL_STATEMENTS)
-        conn.commit.assert_called_once()
+        # +1 for CREATE_VECTOR_EXTENSION, which runs before the ALL_STATEMENTS loop
+        assert cursor.execute.call_count == len(ALL_STATEMENTS) + 1
+        assert conn.commit.call_count == 2  # once after extension, once after all DDL
 
     @patch("psycopg2.connect")
     def test_upsert_country_returns_id(self, mock_connect, mock_conn):

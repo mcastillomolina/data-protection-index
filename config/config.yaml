@@ -58,6 +58,14 @@ extraction:
   min_section_chars: 100                  # skip sections shorter than this
   max_section_chars: 4000                 # split oversized paragraphs (Tier 3)
 
+scoring:
+  cosine_similarity_threshold: 0.35   # Gate 2 minimum similarity to pass
+  max_sections_per_criterion: 20      # top-N sections returned per criterion query
+  embedding_model: "nomic-embed-text"
+  embedding_provider: "ollama"
+  embedding_dims: 768
+  ollama_base_url: "http://localhost:11434"
+
 logging:
   level: "INFO"  # DEBUG, INFO, WARNING, ERROR
   format: "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
