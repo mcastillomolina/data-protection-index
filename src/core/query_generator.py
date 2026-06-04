@@ -14,6 +14,7 @@ from typing import List, Optional
 from loguru import logger
 
 from src.clients.llm_client import LLMClient
+from src.config.criteria import CRITERION_CORE_QUESTIONS, TRUSTED_DOMAINS_BY_CRITERION
 from src.models.country import Country
 from src.models.document import DocumentMetadata, SearchQuery
 from src.prompts.query_generation import (
@@ -84,6 +85,17 @@ class QueryGenerator:
                 logger.info(f"[CACHE HIT] Queries for '{document.official_name}' ({len(cached)} queries)")
                 return cached
 
+        # Look up criterion context from the document's first criterion id
+        criterion_number = None
+        criterion_core_question = None
+        criterion_trusted_domains = None
+        if document.criteria_ids:
+            cid = document.criteria_ids[0]
+            criterion_number = cid
+            criterion_core_question = CRITERION_CORE_QUESTIONS.get(cid)
+            domains = TRUSTED_DOMAINS_BY_CRITERION.get(cid) or []
+            criterion_trusted_domains = domains if domains else None
+
         # Create prompt
         prompt = create_query_generation_prompt(
             document_name=document.official_name,
@@ -92,7 +104,10 @@ class QueryGenerator:
             government_domains=country.government_domains,
             language=document.expected_language,
             alternate_names=document.alternate_names,
-            known_sources=known_sources
+            known_sources=known_sources,
+            criterion_number=criterion_number,
+            criterion_core_question=criterion_core_question,
+            trusted_domains=criterion_trusted_domains,
         )
 
         try:

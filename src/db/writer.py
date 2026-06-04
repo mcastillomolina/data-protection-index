@@ -130,6 +130,7 @@ class DatabaseWriter:
         country_id: int,
         doc: RetrievedDocument,
         detected_language: str,
+        information_opacity: bool = False,
     ) -> int:
         """Upsert document row; returns its id."""
         content = doc.content
@@ -139,15 +140,17 @@ class DatabaseWriter:
                 """
                 INSERT INTO documents
                     (country_id, document_type, official_name, source_url,
-                     content_type, char_count, detected_language, criteria_ids, retrieved_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     content_type, char_count, detected_language, criteria_ids,
+                     retrieved_at, information_opacity)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (country_id, official_name) DO UPDATE
-                    SET source_url        = EXCLUDED.source_url,
-                        content_type      = EXCLUDED.content_type,
-                        char_count        = EXCLUDED.char_count,
-                        detected_language = EXCLUDED.detected_language,
-                        criteria_ids      = EXCLUDED.criteria_ids,
-                        retrieved_at      = EXCLUDED.retrieved_at
+                    SET source_url          = EXCLUDED.source_url,
+                        content_type        = EXCLUDED.content_type,
+                        char_count          = EXCLUDED.char_count,
+                        detected_language   = EXCLUDED.detected_language,
+                        criteria_ids        = EXCLUDED.criteria_ids,
+                        retrieved_at        = EXCLUDED.retrieved_at,
+                        information_opacity = EXCLUDED.information_opacity
                 RETURNING id
                 """,
                 (
@@ -160,6 +163,7 @@ class DatabaseWriter:
                     detected_language,
                     doc.document.criteria_ids,
                     datetime.now(),
+                    information_opacity,
                 ),
             )
             row = cur.fetchone()

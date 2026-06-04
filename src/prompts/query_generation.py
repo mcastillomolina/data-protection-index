@@ -151,7 +151,10 @@ def create_query_generation_prompt(
     government_domains: List[str],
     language: str,
     alternate_names: List[str] = None,
-    known_sources: List[str] = None
+    known_sources: List[str] = None,
+    criterion_number: int = None,
+    criterion_core_question: str = None,
+    trusted_domains: List[str] = None,
 ) -> str:
     """
     Create a prompt for generating search queries for a specific document.
@@ -199,6 +202,21 @@ Document Information:
             prompt += "  Example query patterns (adapt to the actual document and country):\n"
             for eq in hints["example_queries"]:
                 prompt += f"    - {eq}\n"
+
+    if criterion_number is not None:
+        prompt += f"""
+This document is sought as evidence for:
+Criterion {criterion_number}: {criterion_core_question}
+Queries should surface evidence that answers this criterion's question,
+not just locate the document in general.
+"""
+
+    if trusted_domains:
+        prompt += (
+            "Prioritise these trusted domains "
+            "(use site: operator for Query 1 if applicable):\n"
+            f"{trusted_domains}\n"
+        )
 
     prompt += f"""
 Generate 3-5 search queries with different strategies:

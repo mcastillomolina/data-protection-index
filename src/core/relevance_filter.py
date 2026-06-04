@@ -55,7 +55,9 @@ class RelevanceFilter:
         document: DocumentMetadata,
         results: List[SearchResult],
         country_name: str,
-        top_n: int = 5
+        top_n: int = 5,
+        criterion_number: int = None,
+        criterion_core_question: str = None,
     ) -> List[ScoredResult]:
         """
         Score and filter search results by relevance.
@@ -98,7 +100,9 @@ class RelevanceFilter:
             document_type=document.document_type,
             country_name=country_name,
             search_results=results_dicts,
-            min_score=self.min_relevance_score
+            min_score=self.min_relevance_score,
+            criterion_number=criterion_number,
+            criterion_core_question=criterion_core_question,
         )
 
         try:
@@ -199,7 +203,9 @@ class RelevanceFilter:
         results: List[SearchResult],
         country_name: str,
         batch_size: int = 20,
-        top_n: int = 5
+        top_n: int = 5,
+        criterion_number: int = None,
+        criterion_core_question: str = None,
     ) -> List[ScoredResult]:
         """
         Filter results in batches (for large result sets).
@@ -230,7 +236,9 @@ class RelevanceFilter:
                     document=document,
                     results=batch,
                     country_name=country_name,
-                    top_n=batch_size  # Get all scored results from batch
+                    top_n=batch_size,
+                    criterion_number=criterion_number,
+                    criterion_core_question=criterion_core_question,
                 )
                 all_scored.extend(scored)
 

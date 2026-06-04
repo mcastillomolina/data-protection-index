@@ -650,7 +650,12 @@ def extract_information_from_retrieval(
 
         # Step 5: Upsert to DB
         if db_writer and country_id is not None:
-            doc_id = db_writer.upsert_document(country_id, retrieved_doc, detected_lang)
+            doc_id = db_writer.upsert_document(
+                country_id,
+                retrieved_doc,
+                detected_lang,
+                information_opacity=retrieved_doc.document.information_opacity,
+            )
             for sr in section_results:
                 db_writer.upsert_section_extraction(
                     doc_id, sr,

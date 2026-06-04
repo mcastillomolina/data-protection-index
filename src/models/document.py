@@ -24,6 +24,10 @@ class DocumentMetadata(BaseModel):
         default_factory=list,
         description="PI criterion IDs (1–14) this document is evidence for",
     )
+    information_opacity: bool = Field(
+        default=False,
+        description="True if enforcement evidence is likely behind national firewalls",
+    )
 
     class Config:
         """Pydantic config."""

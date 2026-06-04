@@ -124,6 +124,11 @@ CREATE INDEX IF NOT EXISTS idx_documents_country     ON documents(country_id);
 CREATE INDEX IF NOT EXISTS idx_documents_type        ON documents(document_type);
 """
 
+ALTER_DOCUMENTS_OPACITY = """
+ALTER TABLE documents
+  ADD COLUMN IF NOT EXISTS information_opacity BOOLEAN DEFAULT FALSE;
+"""
+
 ALL_STATEMENTS = [
     CREATE_CRITERIA,
     CREATE_COUNTRIES,
@@ -132,4 +137,5 @@ ALL_STATEMENTS = [
     CREATE_DOCUMENT_EXTRACTIONS,
     CREATE_INDEXES,
     SEED_CRITERIA,
+    ALTER_DOCUMENTS_OPACITY,
 ]
