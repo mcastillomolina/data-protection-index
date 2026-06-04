@@ -125,7 +125,9 @@ def create_relevance_scoring_prompt(
     document_type: str,
     country_name: str,
     search_results: List[Dict[str, str]],
-    min_score: float = 6.0
+    min_score: float = 6.0,
+    criterion_number: int = None,
+    criterion_core_question: str = None,
 ) -> str:
     """
     Create a prompt for scoring search results relevance.
@@ -162,6 +164,16 @@ Result #{i}:
 - Domain: {domain}
 - Title: {title}
 - Snippet: {snippet}
+"""
+
+    if criterion_number is not None:
+        prompt += f"""
+This URL is being evaluated for:
+Criterion {criterion_number}: {criterion_core_question}
+
+Score higher if the URL likely contains direct evidence answering this
+criterion's question. Score lower if it only mentions the country or
+document type without addressing the criterion.
 """
 
     prompt += f"""

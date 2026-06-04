@@ -112,6 +112,7 @@ class DocumentIdentifier:
                         alternate_names=doc_data.get("alternate_names", []),
                         expected_file_types=doc_data.get("expected_file_types", ["pdf", "html"]),
                         criteria_ids=get_criteria_ids(doc_type),
+                        information_opacity=doc_data.get("information_opacity", False),
                     )
                     documents.append(doc)
                     logger.debug(

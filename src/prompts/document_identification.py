@@ -82,6 +82,10 @@ DOCUMENT_IDENTIFICATION_SCHEMA = {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Expected file formats (e.g., ['pdf', 'html'])"
+                    },
+                    "information_opacity": {
+                        "type": "boolean",
+                        "description": "True if enforcement evidence is likely behind national firewalls. Omit or false otherwise."
                     }
                 },
                 "required": [
@@ -144,6 +148,11 @@ Your goal is to find documentary evidence for all 14 Privacy International crite
 12. Border & trans-border issues     — border_surveillance_law
 13. Leadership                       — international_treaty
 14. Democratic safeguards            — court_decision, parliamentary_report
+
+For countries with restricted information environments (China, Russia, Belarus, \
+Iran, North Korea), set "information_opacity": true on documents where enforcement \
+evidence is likely inaccessible outside national firewalls. This is a signal for \
+the scoring engine, not a reason to skip the document.
 
 Try to find at least one document per criterion. A country without a surveillance_law \
 identified means criteria 6, 7, 9, 11 will have no evidence — identify it even if \
