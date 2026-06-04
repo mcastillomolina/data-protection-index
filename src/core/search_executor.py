@@ -165,9 +165,11 @@ class SearchExecutor:
                 site = f"site:{site}"
             search_parts.append(site)
 
-        # Add file type hint if present
+        # Add file type hint if not already present in the query string
         if query.file_type_hint:
-            search_parts.append(f"filetype:{query.file_type_hint}")
+            suffix = f"filetype:{query.file_type_hint}"
+            if suffix not in query.query_string.lower():
+                search_parts.append(suffix)
 
         search_string = " ".join(search_parts)
 

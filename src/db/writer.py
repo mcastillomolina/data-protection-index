@@ -172,6 +172,7 @@ class DatabaseWriter:
         result: SectionExtractionResult,
         llm_provider: str,
         llm_model: str,
+        extraction_dimension: Optional[str] = None,
     ) -> int:
         """Upsert a single section extraction row; returns its id."""
         conn = self._get_conn()
@@ -186,8 +187,8 @@ class DatabaseWriter:
                 INSERT INTO section_extractions
                     (document_id, section_index, section_header, section_text_original,
                      split_tier_used, extracted_fields, all_null, llm_provider, llm_model,
-                     processing_time_seconds, error_message)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     processing_time_seconds, error_message, extraction_dimension)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (document_id, section_index) DO UPDATE
                     SET section_header          = EXCLUDED.section_header,
                         section_text_original   = EXCLUDED.section_text_original,
@@ -198,6 +199,7 @@ class DatabaseWriter:
                         llm_model               = EXCLUDED.llm_model,
                         processing_time_seconds = EXCLUDED.processing_time_seconds,
                         error_message           = EXCLUDED.error_message,
+                        extraction_dimension    = EXCLUDED.extraction_dimension,
                         extracted_at            = NOW()
                 RETURNING id
                 """,
@@ -213,6 +215,7 @@ class DatabaseWriter:
                     llm_model,
                     result.processing_time_seconds,
                     result.error_message,
+                    extraction_dimension,
                 ),
             )
             row = cur.fetchone()
@@ -228,24 +231,34 @@ class DatabaseWriter:
         """Upsert aggregated document extraction; returns its id."""
         conn = self._get_conn()
         enforcement = aggregated.get("enforcement_body")
+        constitutional_privacy_right = aggregated.get("constitutional_privacy_right")
+        dpa_exists = aggregated.get("dpa_exists")
+        dpa_independence = aggregated.get("dpa_independence")
+        extraction_dimension = metadata.get("extraction_dimension")
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO document_extractions
                     (document_id, extracted_fields, enforcement_authority,
                      total_sections, sections_with_signal, split_tier_used,
-                     detected_language, status, extracted_at, error_message)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+                     detected_language, status, extracted_at, error_message,
+                     extraction_dimension, constitutional_privacy_right,
+                     dpa_exists, dpa_independence)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, %s)
                 ON CONFLICT (document_id) DO UPDATE
-                    SET extracted_fields      = EXCLUDED.extracted_fields,
-                        enforcement_authority = EXCLUDED.enforcement_authority,
-                        total_sections        = EXCLUDED.total_sections,
-                        sections_with_signal  = EXCLUDED.sections_with_signal,
-                        split_tier_used       = EXCLUDED.split_tier_used,
-                        detected_language     = EXCLUDED.detected_language,
-                        status                = EXCLUDED.status,
-                        extracted_at          = NOW(),
-                        error_message         = EXCLUDED.error_message
+                    SET extracted_fields             = EXCLUDED.extracted_fields,
+                        enforcement_authority        = EXCLUDED.enforcement_authority,
+                        total_sections               = EXCLUDED.total_sections,
+                        sections_with_signal         = EXCLUDED.sections_with_signal,
+                        split_tier_used              = EXCLUDED.split_tier_used,
+                        detected_language            = EXCLUDED.detected_language,
+                        status                       = EXCLUDED.status,
+                        extracted_at                 = NOW(),
+                        error_message                = EXCLUDED.error_message,
+                        extraction_dimension         = EXCLUDED.extraction_dimension,
+                        constitutional_privacy_right = EXCLUDED.constitutional_privacy_right,
+                        dpa_exists                   = EXCLUDED.dpa_exists,
+                        dpa_independence             = EXCLUDED.dpa_independence
                 RETURNING id
                 """,
                 (
@@ -258,6 +271,10 @@ class DatabaseWriter:
                     metadata.get("detected_language", "unknown"),
                     metadata.get("status", "success"),
                     metadata.get("error_message"),
+                    extraction_dimension,
+                    constitutional_privacy_right,
+                    dpa_exists,
+                    dpa_independence,
                 ),
             )
             row = cur.fetchone()
