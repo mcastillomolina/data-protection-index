@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   db:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: dpi_postgres
     environment:
       POSTGRES_USER: dpi
@@ -18,5 +18,15 @@ services:
       timeout: 5s
       retries: 5
 
+  ollama:
+    image: ollama/ollama
+    container_name: dpi_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
 volumes:
   dpi_pgdata:
+  ollama_data:

@@ -129,6 +129,123 @@ ALTER TABLE documents
   ADD COLUMN IF NOT EXISTS information_opacity BOOLEAN DEFAULT FALSE;
 """
 
+# ── D.0c ─────────────────────────────────────────────────────────────────────
+# Run separately in ensure_schema() so failure can be caught and surfaced with
+# actionable instructions (the image must be pgvector/pgvector:pg16).
+CREATE_VECTOR_EXTENSION = "CREATE EXTENSION IF NOT EXISTS vector;"
+
+ALTER_SECTION_EXTRACTIONS_EMBEDDING = """
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'section_extractions' AND column_name = 'embedding'
+  ) THEN
+    ALTER TABLE section_extractions ADD COLUMN embedding vector(768);
+  ELSE
+    -- Change dimension to 768 if needed (safe: all values are NULL before first run)
+    ALTER TABLE section_extractions ALTER COLUMN embedding TYPE vector(768);
+  END IF;
+END $$;
+
+ALTER TABLE section_extractions
+  ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(50);
+
+DROP INDEX IF EXISTS idx_section_embeddings;
+CREATE INDEX IF NOT EXISTS idx_section_embeddings
+  ON section_extractions
+  USING ivfflat (embedding vector_cosine_ops)
+  WITH (lists = 100)
+  WHERE embedding IS NOT NULL;
+"""
+
+# ── D.1 ──────────────────────────────────────────────────────────────────────
+ALTER_DOCUMENT_EXTRACTIONS_PI_FIELDS = """
+ALTER TABLE document_extractions
+  ADD COLUMN IF NOT EXISTS constitutional_privacy_right BOOLEAN,
+  ADD COLUMN IF NOT EXISTS dpa_exists                   BOOLEAN,
+  ADD COLUMN IF NOT EXISTS dpa_independence             VARCHAR(30),
+  ADD COLUMN IF NOT EXISTS data_retention_period        VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS interception_legal_standard  VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS information_opacity_flag     BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS dimension                    VARCHAR(20);
+"""
+
+# ── D.2 ──────────────────────────────────────────────────────────────────────
+CREATE_ENFORCEMENT_RECORDS = """
+CREATE TABLE IF NOT EXISTS enforcement_records (
+    id                       SERIAL PRIMARY KEY,
+    country_id               INTEGER REFERENCES countries(id),
+    document_id              INTEGER REFERENCES documents(id),
+    source_type              VARCHAR(30) NOT NULL,
+    source_url               TEXT,
+    source_domain            VARCHAR(255),
+    source_language          CHAR(5)     DEFAULT 'en',
+    enforcing_body           VARCHAR(255),
+    subject_entity           VARCHAR(255),
+    pi_criterion_number      INTEGER,
+    sanction_type            VARCHAR(50),
+    sanction_amount          NUMERIC,
+    sanction_currency        CHAR(3),
+    sanction_date            DATE,
+    summary                  TEXT,
+    raw_text                 TEXT,
+    reliability_score        FLOAT       DEFAULT 0.8,
+    information_opacity_flag BOOLEAN     DEFAULT FALSE,
+    created_at               TIMESTAMPTZ DEFAULT NOW(),
+    updated_at               TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_enforcement_records_country
+  ON enforcement_records(country_id);
+CREATE INDEX IF NOT EXISTS idx_enforcement_records_criterion
+  ON enforcement_records(pi_criterion_number);
+CREATE INDEX IF NOT EXISTS idx_enforcement_records_date
+  ON enforcement_records(sanction_date);
+"""
+
+# ── D.3 ──────────────────────────────────────────────────────────────────────
+CREATE_TRUSTED_SOURCES = """
+CREATE TABLE IF NOT EXISTS trusted_sources (
+    id                  SERIAL PRIMARY KEY,
+    country_code        CHAR(2),
+    pi_criterion_number INTEGER,
+    domain              VARCHAR(255) NOT NULL,
+    source_type         VARCHAR(20)  NOT NULL,
+    language            CHAR(5)      DEFAULT 'en',
+    search_engine       VARCHAR(20)  DEFAULT 'google',
+    reliability_score   FLOAT        DEFAULT 1.0,
+    requires_search     BOOLEAN      DEFAULT TRUE,
+    geo_restriction     VARCHAR(100),
+    last_validated      DATE,
+    notes               TEXT,
+    created_at          TIMESTAMPTZ  DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trusted_sources_domain_country_criterion
+  ON trusted_sources(
+    domain,
+    COALESCE(country_code, ''),
+    COALESCE(pi_criterion_number, 0)
+  );
+"""
+
+SEED_TRUSTED_SOURCES = """
+INSERT INTO trusted_sources (domain, source_type, pi_criterion_number, requires_search, reliability_score) VALUES
+  ('constituteproject.org', 'institutional', 1,    false, 1.0),
+  ('hudoc.echr.coe.int',    'institutional', 1,    false, 1.0),
+  ('gdprhub.eu',            'institutional', 3,    true,  0.9),
+  ('edpb.europa.eu',        'institutional', 3,    false, 1.0),
+  ('freedomhouse.org',      'ngo',           14,   false, 0.9),
+  ('v-dem.net',             'institutional', 14,   false, 0.95),
+  ('rsf.org',               'ngo',           14,   false, 0.85),
+  ('treaty.un.org',         'institutional', 13,   false, 1.0),
+  ('privacyinternational.org', 'ngo',        NULL, true,  0.85),
+  ('eff.org',               'ngo',           NULL, true,  0.8),
+  ('accessnow.org',         'ngo',           NULL, true,  0.8)
+ON CONFLICT DO NOTHING;
+"""
+
 ALL_STATEMENTS = [
     CREATE_CRITERIA,
     CREATE_COUNTRIES,
@@ -138,4 +255,10 @@ ALL_STATEMENTS = [
     CREATE_INDEXES,
     SEED_CRITERIA,
     ALTER_DOCUMENTS_OPACITY,
+    # D.0c — vector extension handled separately in ensure_schema(); these run after
+    ALTER_SECTION_EXTRACTIONS_EMBEDDING,
+    ALTER_DOCUMENT_EXTRACTIONS_PI_FIELDS,
+    CREATE_ENFORCEMENT_RECORDS,
+    CREATE_TRUSTED_SOURCES,
+    SEED_TRUSTED_SOURCES,
 ]

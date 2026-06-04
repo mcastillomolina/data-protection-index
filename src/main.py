@@ -885,6 +885,16 @@ Examples:
         action="store_true",
         help="Skip PostgreSQL writes during Phase 3 (JSON output only)"
     )
+    parser.add_argument(
+        "--populate-embeddings",
+        action="store_true",
+        help="After Phase 3, embed all non-null sections with the configured embedding model"
+    )
+    parser.add_argument(
+        "--embeddings-only",
+        action="store_true",
+        help="Skip Phases 1–3; embed pending sections for a country already in the DB"
+    )
 
     args = parser.parse_args()
 
@@ -906,13 +916,41 @@ Examples:
         # Initialise DB writer early so country resolution can use it
         import os
         db_writer: Optional[DatabaseWriter] = None
+        dsn = os.getenv("DATABASE_URL")
         if not args.skip_db:
-            dsn = os.getenv("DATABASE_URL")
             if dsn:
                 db_writer = DatabaseWriter(dsn)
                 db_writer.ensure_schema()
             else:
                 logger.warning("DATABASE_URL not set — skipping DB writes")
+
+        # --embeddings-only requires a DB connection
+        if args.embeddings_only and not dsn:
+            logger.error("--embeddings-only requires DATABASE_URL to be set")
+            sys.exit(1)
+
+        # ------------------------------------------------------------------
+        # --embeddings-only: skip all phases, embed pending sections from DB
+        # ------------------------------------------------------------------
+        if args.embeddings_only:
+            if not db_writer:
+                db_writer = DatabaseWriter(dsn)
+                db_writer.ensure_schema()
+            country_id = db_writer.get_country_id_by_name(args.country)
+            if country_id is None:
+                logger.error(
+                    f"Country '{args.country}' not found in the database. "
+                    "Run the full pipeline first to populate it."
+                )
+                sys.exit(1)
+            embedding_client = config.get_embedding_client()
+            from src.core.embedding_populator import EmbeddingPopulator
+            populator = EmbeddingPopulator(dsn=dsn, embedding_client=embedding_client)
+            n = populator.populate(country_id)
+            print(f"\n✅ Embedded {n} sections for '{args.country}' "
+                  f"using {embedding_client.model}")
+            db_writer.close()
+            sys.exit(0)
 
         # ------------------------------------------------------------------
         # --extraction-only: skip Phases 1+2, load existing retrieval output
@@ -975,14 +1013,32 @@ Examples:
                 verbose=args.verbose,
             )
 
-            if db_writer:
-                db_writer.close()
-
             if not args.no_save:
                 extraction_file = save_extraction_output(extraction_output, output_dir)
                 print(f"\n✅ Extraction results saved to: {extraction_file}")
 
             print_extraction_summary(extraction_output)
+
+            # Optional: embed non-null sections after Phase 3
+            if args.populate_embeddings and db_writer and dsn:
+                country_id = db_writer.get_country_id_by_name(args.country)
+                if country_id is not None:
+                    embedding_client = config.get_embedding_client()
+                    from src.core.embedding_populator import EmbeddingPopulator
+                    populator = EmbeddingPopulator(
+                        dsn=dsn, embedding_client=embedding_client
+                    )
+                    n = populator.populate(country_id)
+                    print(f"\n✅ Embedded {n} sections for '{args.country}' "
+                          f"using {embedding_client.model}")
+                else:
+                    logger.warning(
+                        f"Could not find country_id for '{args.country}' — "
+                        "skipping embedding population"
+                    )
+
+        if db_writer:
+            db_writer.close()
 
         # Exit successfully
         sys.exit(0)

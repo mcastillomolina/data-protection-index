@@ -50,3 +50,21 @@ TRUSTED_DOMAINS_BY_CRITERION: dict[int, list[str]] = {
     13: ["treaty.un.org", "coe.int"],
     14: ["freedomhouse.org", "v-dem.net", "rsf.org"],
 }
+
+# Embedded once per criterion; used as the query vector for Gate 2 cosine search.
+CRITERION_QUERY_SENTENCES: dict[int, str] = {
+    1:  "Constitutional protection of privacy rights and court jurisprudence on data protection",
+    2:  "Data protection law rights of individuals obligations on data controllers",
+    3:  "Data protection authority enforcement actions sanctions fines independence",
+    4:  "National identity card biometric database fingerprint collection",
+    5:  "Secondary use of personal data inter-agency data sharing government programs",
+    6:  "CCTV surveillance cameras public spaces facial recognition regulation",
+    7:  "Communications interception wiretapping warrant judicial authorisation",
+    8:  "Workplace monitoring employee surveillance privacy protection",
+    9:  "Law enforcement access to personal data warrant requirement",
+    10: "Mandatory data retention telecommunications traffic data period",
+    11: "Medical records financial data location tracking surveillance protection",
+    12: "Border control biometrics passenger name record international data sharing",
+    13: "International treaty data sharing surveillance Budapest Convention Prum",
+    14: "Parliamentary oversight judicial review executive surveillance democratic safeguards",
+}
