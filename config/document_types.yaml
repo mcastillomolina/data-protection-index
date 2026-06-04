@@ -7,6 +7,11 @@ document_types:
     priority: 10
     expected_file_types: ["pdf", "html"]
     common_keywords: ["constitution", "fundamental law", "charter"]
+    pi_criteria_covered: [1]
+    dimension: legal
+    known_sources:
+      - constituteproject.org
+      - national parliament websites
 
   - id: "data_protection_law"
     name: "Data Protection Law"
@@ -14,6 +19,8 @@ document_types:
     priority: 10
     expected_file_types: ["pdf", "html"]
     common_keywords: ["data protection", "privacy law", "personal data"]
+    pi_criteria_covered: [2, 5, 9, 10]
+    dimension: legal
 
   - id: "dpa_reports"
     name: "Data Protection Authority Reports"
@@ -21,6 +28,7 @@ document_types:
     priority: 8
     expected_file_types: ["pdf"]
     common_keywords: ["annual report", "enforcement", "authority report"]
+    legacy: true
 
   - id: "enforcement_records"
     name: "Enforcement Records"
@@ -28,6 +36,7 @@ document_types:
     priority: 7
     expected_file_types: ["pdf", "html"]
     common_keywords: ["fines", "sanctions", "penalties", "enforcement actions"]
+    legacy: true
 
   - id: "regulatory_guidance"
     name: "Regulatory Guidance"
@@ -35,6 +44,7 @@ document_types:
     priority: 5
     expected_file_types: ["pdf", "html"]
     common_keywords: ["guidance", "guidelines", "recommendations"]
+    legacy: true
 
   - id: "legislative_history"
     name: "Legislative History"
@@ -42,3 +52,119 @@ document_types:
     priority: 3
     expected_file_types: ["pdf", "html"]
     common_keywords: ["legislative history", "parliamentary debate", "amendments"]
+
+  # --- New: Legal dimension ---
+  - id: "data_retention_law"
+    name: "Communications Data Retention Law or Regulation"
+    description: "Law mandating retention of telecommunications traffic and metadata by ISPs or telecoms. Examples: EU Data Retention Directive (2006/24/EC), UK Investigatory Powers Act retention schedules, German TKG §113b, Australian Telecommunications (Interception and Access) Act retention rules."
+    pi_criteria_covered: [10]
+    dimension: legal
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["data retention", "telecommunications", "traffic data", "metadata retention", "ISP", "interception"]
+    known_sources:
+      - eur-lex.europa.eu
+
+  - id: "biometrics_id_law"
+    name: "Identity Card and Biometrics Law"
+    description: "Law governing national ID cards, biometric passports, and central biometric databases. Examples: German Personalausweisgesetz, French Code de la sécurité intérieure biometrics provisions, Indian Aadhaar Act, UK Identity Documents Act, Australian Identity-matching Services Bill."
+    pi_criteria_covered: [4]
+    dimension: mixed
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["identity card", "biometric", "national ID", "fingerprint", "facial recognition", "passport", "biometric database"]
+
+  - id: "international_treaty"
+    name: "International Privacy and Data-Sharing Treaty"
+    description: >
+      International treaties covering surveillance cooperation, data sharing,
+      or cybercrime. Examples: Budapest Convention on Cybercrime (Council of
+      Europe), Treaty of Prum (EU), EU-US Privacy Shield / Data Privacy Framework,
+      MLAT agreements, Five Eyes intelligence sharing agreements, CLOUD Act (USA).
+    pi_criteria_covered: [13]
+    dimension: legal
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["treaty", "convention", "Budapest", "cybercrime", "data sharing", "mutual legal assistance", "MLAT", "intelligence sharing"]
+    known_sources:
+      - treaty.un.org
+      - coe.int
+
+  # --- New: Enforcement dimension ---
+  - id: "enforcement_report"
+    name: "DPA Enforcement Report or Annual Report"
+    description: "Official reports from Data Protection Authority detailing investigations, sanctions issued, and enforcement activity"
+    pi_criteria_covered: [3]
+    dimension: enforcement
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["enforcement", "sanctions", "fines", "investigations", "DPA report", "annual report", "data protection authority"]
+    known_sources:
+      - gdprhub.eu
+      - edpb.europa.eu
+      - ico.org.uk
+      - cnil.fr
+
+  - id: "surveillance_law"
+    name: "Surveillance and Interception Law"
+    description: >
+      Laws governing state surveillance powers: communications interception,
+      wiretapping, lawful intercept frameworks, CCTV regulation, and intelligence
+      agency authorities. Examples: CSIS Act and CSE Act (Canada), Investigatory
+      Powers Act (UK), G-10 Gesetz (Germany), loi Renseignement (France),
+      FISA (USA), Ley de Seguridad Nacional (Spain).
+    pi_criteria_covered: [6, 7, 11]
+    dimension: mixed
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["surveillance", "interception", "wiretapping", "CCTV", "lawful intercept", "intelligence", "security service", "signals intelligence"]
+    known_sources:
+      - privacyinternational.org
+      - eff.org
+      - accessnow.org
+
+  - id: "border_surveillance_law"
+    name: "Border Control and Trans-border Data Law"
+    description: >
+      Laws governing biometrics at borders, passenger name records (PNR),
+      and cross-border law enforcement data sharing. Examples: EU PNR Directive,
+      US REAL-ID Act, Smart Border Declaration (Canada-US), e-Borders (UK),
+      Frontex regulations (EU).
+    pi_criteria_covered: [12]
+    dimension: enforcement
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["border control", "passenger name record", "PNR", "biometric border", "entry exit system", "Frontex", "smart border", "e-borders"]
+    known_sources:
+      - statewatch.org
+      - privacyinternational.org
+
+  - id: "workplace_privacy_law"
+    name: "Workplace Privacy Law or Regulation"
+    description: >
+      Laws, regulations, or guidelines protecting employee privacy: monitoring,
+      email surveillance, drug testing, CCTV in workplace. Examples: Finnish
+      Act on Privacy in Working Life, German Betriebsverfassungsgesetz,
+      French Code du travail privacy provisions, UK ICO Employment Practices Code.
+    pi_criteria_covered: [8]
+    dimension: enforcement
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["workplace monitoring", "employee privacy", "employment", "email surveillance", "CCTV workplace", "works council", "staff monitoring"]
+    known_sources:
+      - eurofound.europa.eu
+
+  - id: "court_decision"
+    name: "Constitutional or Supreme Court Privacy Decision"
+    description: "Key court rulings establishing or limiting privacy rights — jurisprudence that shapes the constitutional protection criterion"
+    pi_criteria_covered: [1, 14]
+    dimension: mixed
+    expected_file_types: ["pdf", "html"]
+    common_keywords: ["court decision", "ruling", "judgment", "privacy rights", "constitutional court", "supreme court", "fundamental rights", "jurisprudence"]
+    known_sources:
+      - hudoc.echr.coe.int
+      - venice.coe.int
+
+  - id: "dpa_annual_report"
+    name: "DPA Annual Report"
+    description: "Annual activity reports from the national Data Protection Authority — staffing levels, budget, cases handled, sanctions"
+    pi_criteria_covered: [3]
+    dimension: enforcement
+    expected_file_types: ["pdf"]
+    common_keywords: ["annual report", "data protection authority", "DPA", "privacy commissioner", "cases handled", "budget", "staff", "sanctions issued"]
+    known_sources:
+      - edpb.europa.eu
+      - gdprhub.eu

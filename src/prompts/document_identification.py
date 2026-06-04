@@ -5,7 +5,41 @@ This module contains system and user prompts for identifying relevant
 legal documents for a country using LLM.
 """
 
+from pathlib import Path
 from typing import Dict, Any
+import yaml
+
+
+_CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
+
+
+def _build_document_types_block(allowed_ids: set = None) -> str:
+    """Load document_types.yaml and format non-legacy types for prompt injection.
+
+    Args:
+        allowed_ids: If provided, only include types whose id is in this set.
+                     Legacy types are always excluded regardless.
+    """
+    yaml_path = _CONFIG_DIR / "document_types.yaml"
+    with open(yaml_path) as f:
+        data = yaml.safe_load(f)
+
+    lines = []
+    for dt in data.get("document_types", []):
+        if dt.get("legacy"):
+            continue
+        if allowed_ids is not None and dt["id"] not in allowed_ids:
+            continue
+        lines.append(f"- id: {dt['id']}")
+        lines.append(f"  name: {dt['name']}")
+        lines.append(f"  description: {dt['description']}")
+        if dt.get("pi_criteria_covered"):
+            lines.append(f"  pi_criteria_covered: {dt['pi_criteria_covered']}")
+        if dt.get("common_keywords"):
+            lines.append(f"  keywords: {dt['common_keywords']}")
+        if dt.get("known_sources"):
+            lines.append(f"  known_sources: [{', '.join(dt['known_sources'])}]")
+    return "\n".join(lines)
 
 
 # JSON schema for document identification response
@@ -19,7 +53,7 @@ DOCUMENT_IDENTIFICATION_SCHEMA = {
                 "properties": {
                     "document_type": {
                         "type": "string",
-                        "description": "Type of document (e.g., 'constitution', 'data_protection_law', 'dpa_reports')"
+                        "description": "Type of document — must be one of the allowed ids listed in the prompt"
                     },
                     "official_name": {
                         "type": "string",
@@ -72,30 +106,48 @@ DOCUMENT_IDENTIFICATION_SCHEMA = {
 }
 
 
-SYSTEM_PROMPT = """You are an expert legal researcher specializing in data protection and privacy law. Your task is to identify relevant legal documents for a given country that relate to data protection, privacy rights, and related regulations.
+SYSTEM_PROMPT = """You are an expert legal researcher specialising in data protection, \
+privacy law, surveillance law, and civil liberties. Your task is to identify relevant \
+legal documents for a given country across ALL dimensions of privacy protection — not \
+just comprehensive data protection laws.
 
-You should identify documents in the following categories:
-1. Constitution - National constitution with privacy/data protection provisions
-2. Data Protection Law - Primary legislation governing data protection
-3. Data Protection Authority Reports - Annual reports, enforcement decisions
-4. Enforcement Records - Published fines, sanctions, case decisions
-5. Regulatory Guidance - Official guidance documents from the DPA
-6. Legislative History - Parliamentary debates, amendments, explanatory notes
-
-For each document, provide:
-- document_type: The category from above (use snake_case)
-- official_name: The exact official name in the original language
-- description: A brief description of the document and its relevance
+For each document provide:
+- document_type: must be one of the allowed type ids listed in the user message
+- official_name: exact official name in the original language
+- description: brief description of the document and its relevance
 - expected_language: ISO 639-1 language code
-- priority_score: 1-10, where 10 is most critical for understanding data protection
-- alternate_names: Common abbreviations or alternative names (if any)
-- expected_file_types: Likely formats this document exists in (pdf, html, etc.)
+- priority_score: 1-10 (10 = most critical for understanding the country's privacy posture)
+- alternate_names: common abbreviations or alternative names (if any)
+- expected_file_types: likely formats (pdf, html, etc.)
+
+Use the most specific matching type. If a document fits multiple types, prefer the one \
+with the narrowest scope.
 
 Focus on:
 - Official government sources
 - Currently in force legislation (not repealed laws)
 - Documents that actually exist (not theoretical)
 - Authoritative sources
+
+Your goal is to find documentary evidence for all 14 Privacy International criteria:
+1.  Constitutional protection        — constitution, court_decision
+2.  Statutory protection             — data_protection_law
+3.  Privacy enforcement              — enforcement_report, dpa_annual_report
+4.  Identity cards & biometrics      — biometrics_id_law
+5.  Data sharing                     — data_protection_law, legislative_history
+6.  Visual surveillance              — surveillance_law
+7.  Communication interception       — surveillance_law
+8.  Workplace monitoring             — workplace_privacy_law
+9.  Government access to data        — surveillance_law, data_protection_law
+10. Communications data retention    — data_retention_law
+11. Surveillance of medical/financial/movement — surveillance_law, sectoral laws
+12. Border & trans-border issues     — border_surveillance_law
+13. Leadership                       — international_treaty
+14. Democratic safeguards            — court_decision, parliamentary_report
+
+Try to find at least one document per criterion. A country without a surveillance_law \
+identified means criteria 6, 7, 9, 11 will have no evidence — identify it even if \
+it is not a dedicated privacy law.
 
 Respond with valid JSON only."""
 
@@ -119,7 +171,8 @@ def create_identification_prompt(
         government_domains: List of government domain extensions
         region: Geographic region (e.g., "Latin America", "Europe")
         known_documents: Optional dict of known document names by type
-        document_types: Optional list of specific document types to focus on
+        document_types: Optional list of specific document type ids to focus on
+            (if None, all non-legacy types from document_types.yaml are used)
 
     Returns:
         Formatted user prompt string
@@ -130,28 +183,26 @@ Country Information:
 - Name: {country_name}
 - ISO Code: {iso_code}
 - Official Languages: {', '.join(official_languages)}
-- Government Domains: {', '.join(government_domains)}
+- Government Domains: {', '.join(government_domains) if government_domains else 'unknown'}
 - Region: {region}
 """
 
     if known_documents:
-        prompt += f"\nKnown Documents (for reference):\n"
+        prompt += "\nKnown Documents (for reference):\n"
         for doc_type, doc_name in known_documents.items():
             prompt += f"- {doc_type}: {doc_name}\n"
 
-    if document_types:
-        prompt += f"\nFocus on these document types: {', '.join(document_types)}\n"
+    allowed_ids = set(document_types) if document_types else None
+    types_block = _build_document_types_block(allowed_ids)
 
-    prompt += """
-Please identify:
-1. The national constitution (if it contains privacy/data protection provisions)
-2. The primary data protection law(s)
-3. Any sector-specific data protection regulations
-4. The Data Protection Authority (DPA) and its key publications
-5. Recent enforcement decisions or fines (if publicly available)
-6. Official regulatory guidance documents
+    prompt += f"""
+Allowed document_type values (use the id field exactly):
+{types_block}
 
-For each document, use your knowledge of this country's legal system to provide accurate official names and relevant details.
+Identify documents that exist for {country_name}. Prioritise types that cover \
+pi_criteria_covered values — these are essential for the privacy index. \
+Try to cover all 14 criteria. Do not invent documents — only include documents \
+you are reasonably certain exist for this country.
 
 Respond with a JSON object containing an array of documents and metadata."""
 
@@ -168,15 +219,13 @@ def create_simple_identification_prompt(country_name: str) -> str:
     Returns:
         Simplified user prompt string
     """
+    types_block = _build_document_types_block()
     return f"""Identify the key data protection and privacy legal documents for {country_name}.
 
-Include:
-1. Constitution (if it has privacy provisions)
-2. Main data protection law(s)
-3. Data Protection Authority reports
-4. Any other critical privacy/data protection legislation
+Allowed document_type values:
+{types_block}
 
-For each document, provide the official name, description, priority (1-10), and any alternate names.
+For each document provide the official name, description, priority (1-10), and alternate names.
 
 Respond with JSON containing an array of documents."""
 
@@ -201,11 +250,20 @@ EXAMPLE_RESPONSE = {
             "priority_score": 10,
             "alternate_names": ["Ley 19.628", "Ley de Protección de Datos"],
             "expected_file_types": ["pdf", "html"]
+        },
+        {
+            "document_type": "enforcement_report",
+            "official_name": "Informe Anual del Consejo para la Transparencia",
+            "description": "Annual enforcement report from Chile's DPA with sanctions and cases",
+            "expected_language": "es",
+            "priority_score": 8,
+            "alternate_names": ["CPLT Annual Report"],
+            "expected_file_types": ["pdf"]
         }
     ],
     "metadata": {
         "country": "Chile",
-        "total_documents": 2,
+        "total_documents": 3,
         "notes": "Chile is in the process of modernizing its data protection framework"
     }
 }

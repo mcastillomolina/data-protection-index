@@ -2,6 +2,101 @@
 # Each document type specifies which fields are expected to be populated.
 # Fields not listed here are still extracted; this is a hint for completeness checks.
 
+# --- Global field registry (type + dimension metadata) ---
+extraction_fields:
+  # Existing fields
+  key_provisions:           {type: list,   dimension: legal}
+  data_subject_rights:      {type: list,   dimension: legal}
+  enforcement_body:         {type: str,    dimension: enforcement}
+  lawful_basis:             {type: list,   dimension: legal}
+  notes:                    {type: str,    dimension: both}
+
+  # Split from former 'penalties' field
+  statutory_penalties:
+    type: list
+    dimension: legal
+    description: "Maximum fines or sanctions prescribed by law (what the law says can happen)"
+    example: ["Up to 4% global annual turnover", "Criminal imprisonment up to 2 years"]
+
+  actual_sanctions:
+    type: list
+    dimension: enforcement
+    description: "Fines or sanctions actually issued by a regulator — include entity, amount, date if present"
+    example: ["Meta fined €1.2B by Irish DPC, May 2023"]
+
+  # New: Legal dimension fields
+  constitutional_privacy_right:
+    type: bool
+    dimension: legal
+    description: "Does the constitution explicitly protect privacy or data protection?"
+
+  constitutional_articles:
+    type: list
+    dimension: legal
+    description: "Specific constitutional articles cited (e.g. 'Article 18', 'Section 10')"
+
+  data_retention_period:
+    type: str
+    dimension: legal
+    description: "Legally mandated data retention duration (e.g. '12 months', '2 years', 'not specified')"
+
+  interception_legal_standard:
+    type: str
+    dimension: legal
+    description: "Legal standard required for communications interception (e.g. 'judicial warrant', 'ministerial authorisation', 'none required')"
+
+  biometric_legal_basis:
+    type: str
+    dimension: legal
+    description: "Legal basis for biometric collection and storage in national ID or border systems"
+
+  treaties_signed:
+    type: list
+    dimension: legal
+    description: "International treaties relevant to privacy/surveillance signed by this country"
+
+  # New: Enforcement dimension fields
+  dpa_exists:
+    type: bool
+    dimension: enforcement
+    description: "Does an operational Data Protection Authority exist?"
+
+  dpa_independence:
+    type: str
+    dimension: enforcement
+    description: "Level of DPA independence: 'fully_independent', 'ministerial', 'within_government', 'none'"
+
+  dpa_staff_count:
+    type: int
+    dimension: enforcement
+    description: "Number of staff at DPA (if reported)"
+
+  sanctions_count:
+    type: int
+    dimension: enforcement
+    description: "Number of sanctions/fines issued in the reference period (if reported)"
+
+  sanctions_total_amount:
+    type: str
+    dimension: enforcement
+    description: "Total value of sanctions issued in reference period (e.g. '€2.4M', 'not reported')"
+
+  cctv_regulatory_status:
+    type: str
+    dimension: enforcement
+    description: "Whether CCTV deployment is regulated: 'regulated_and_enforced', 'regulated_not_enforced', 'unregulated', 'unknown'"
+
+  border_biometrics_deployed:
+    type: bool
+    dimension: enforcement
+    description: "Are biometric systems (fingerprint, facial recognition) deployed at borders?"
+
+  information_opacity_flag:
+    type: bool
+    dimension: enforcement
+    description: "True if evidence for this document/country is limited due to restricted information environment"
+
+# --- Per-document-type completeness hints ---
 document_types:
   data_protection_law:
     expected_fields:
@@ -10,16 +105,20 @@ document_types:
       - enforcement_body
       - lawful_basis
     optional_fields:
-      - penalties
+      - statutory_penalties
+      - actual_sanctions
+      - dpa_exists
+      - dpa_independence
       - notes
 
   constitution:
     expected_fields:
       - key_provisions
-      - data_subject_rights
+      - constitutional_privacy_right
     optional_fields:
+      - constitutional_articles
+      - data_subject_rights
       - enforcement_body
-      - penalties
       - lawful_basis
       - notes
 
@@ -30,17 +129,88 @@ document_types:
     optional_fields:
       - data_subject_rights
       - enforcement_body
-      - penalties
+      - statutory_penalties
       - notes
 
   enforcement_report:
     expected_fields:
       - enforcement_body
-      - penalties
+      - actual_sanctions
     optional_fields:
+      - dpa_exists
+      - dpa_independence
+      - dpa_staff_count
+      - sanctions_count
+      - sanctions_total_amount
       - key_provisions
-      - data_subject_rights
+      - notes
+
+  dpa_annual_report:
+    expected_fields:
+      - enforcement_body
+      - dpa_exists
+    optional_fields:
+      - dpa_independence
+      - dpa_staff_count
+      - sanctions_count
+      - sanctions_total_amount
+      - actual_sanctions
+      - notes
+
+  surveillance_law:
+    expected_fields:
+      - key_provisions
+      - interception_legal_standard
+    optional_fields:
+      - cctv_regulatory_status
+      - enforcement_body
+      - statutory_penalties
+      - notes
+
+  biometrics_id_law:
+    expected_fields:
+      - key_provisions
+      - biometric_legal_basis
+    optional_fields:
+      - border_biometrics_deployed
+      - enforcement_body
+      - statutory_penalties
+      - notes
+
+  international_treaty:
+    expected_fields:
+      - key_provisions
+      - treaties_signed
+    optional_fields:
       - lawful_basis
+      - notes
+
+  court_decision:
+    expected_fields:
+      - key_provisions
+      - constitutional_privacy_right
+    optional_fields:
+      - constitutional_articles
+      - enforcement_body
+      - notes
+
+  border_surveillance_law:
+    expected_fields:
+      - key_provisions
+      - border_biometrics_deployed
+    optional_fields:
+      - biometric_legal_basis
+      - enforcement_body
+      - statutory_penalties
+      - notes
+
+  workplace_privacy_law:
+    expected_fields:
+      - key_provisions
+      - enforcement_body
+    optional_fields:
+      - statutory_penalties
+      - actual_sanctions
       - notes
 
   default:
@@ -49,6 +219,7 @@ document_types:
     optional_fields:
       - data_subject_rights
       - enforcement_body
-      - penalties
+      - statutory_penalties
+      - actual_sanctions
       - lawful_basis
       - notes

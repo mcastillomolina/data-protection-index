@@ -30,7 +30,7 @@ class DocumentIdentifier:
         self,
         llm_client: LLMClient,
         temperature: float = 0.3,
-        max_tokens: int = 2000
+        max_tokens: int = 4000
     ):
         """
         Initialize document identifier.
