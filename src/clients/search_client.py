@@ -5,7 +5,11 @@ This module provides a unified interface for executing web searches through
 various search providers, with rate limiting, error handling, and deduplication.
 """
 
+import hashlib
+import json
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional, Set
 from urllib.parse import urlparse
 
@@ -39,21 +43,11 @@ class SearchClient:
         api_key: str,
         rate_limit_delay: float = 1.0,
         max_retries: int = 3,
-        timeout: int = 15
+        timeout: int = 15,
+        enable_caching: bool = False,
+        cache_dir: Optional[str] = None,
+        cache_ttl_seconds: int = 2592000,
     ):
-        """
-        Initialize search client.
-
-        Args:
-            provider: Search provider ("serpapi")
-            api_key: API key for the search provider
-            rate_limit_delay: Delay between requests in seconds
-            max_retries: Maximum retry attempts for failed searches
-            timeout: Request timeout in seconds
-
-        Raises:
-            ValueError: If provider is unsupported or API key is missing
-        """
         self.provider = provider.lower()
         self.api_key = api_key
         self.rate_limit_delay = rate_limit_delay
@@ -61,6 +55,9 @@ class SearchClient:
         self.timeout = timeout
         self.last_request_time = 0
         self._seen_urls: Set[str] = set()
+        self.enable_caching = enable_caching
+        self.cache_ttl_seconds = cache_ttl_seconds
+        self._cache_search_dir: Optional[Path] = None
 
         if not api_key:
             raise ValueError(f"API key required for {provider}")
@@ -72,6 +69,11 @@ class SearchClient:
                 )
         else:
             raise ValueError(f"Unsupported search provider: {provider}")
+
+        if enable_caching and cache_dir:
+            self._cache_search_dir = Path(cache_dir) / "search"
+            self._cache_search_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Search cache enabled — dir: {self._cache_search_dir}, TTL: {cache_ttl_seconds}s")
 
         logger.info(f"Initialized SearchClient with provider: {provider}")
 
@@ -104,6 +106,14 @@ class SearchClient:
         Raises:
             Exception: If search fails after all retries
         """
+        # Check cache before hitting SerpAPI
+        if self.enable_caching and self._cache_search_dir is not None:
+            key = self._cache_key(query, country, language, num_results)
+            cached = self._load_from_cache(key)
+            if cached is not None:
+                logger.info(f"[CACHE HIT] '{query[:60]}' — {len(cached)} results")
+                return self._deduplicate_results(cached)
+
         # Apply rate limiting
         self._apply_rate_limit()
 
@@ -118,6 +128,10 @@ class SearchClient:
 
                 results = self._deduplicate_results(results)
                 logger.info(f"Search completed: '{query[:50]}...' returned {len(results)} results")
+
+                if self.enable_caching and self._cache_search_dir is not None:
+                    self._save_to_cache(key, query, country, language, num_results, results)
+
                 return results
 
             except Exception as e:
@@ -129,6 +143,47 @@ class SearchClient:
                 else:
                     logger.error(f"Search failed after {self.max_retries} attempts")
                     raise
+
+    def _cache_key(self, query: str, country: Optional[str], language: Optional[str], num_results: int) -> str:
+        raw = f"{query}|{country or ''}|{language or ''}|{num_results}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+    def _cache_path(self, key: str) -> Path:
+        return self._cache_search_dir / f"{key}.json"
+
+    def _load_from_cache(self, key: str) -> Optional[List[Dict]]:
+        path = self._cache_path(key)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            cached_at = datetime.fromisoformat(data["cached_at"])
+            if (datetime.now() - cached_at).total_seconds() > self.cache_ttl_seconds:
+                logger.debug(f"Cache expired for key {key}")
+                return None
+            return data["results"]
+        except Exception as e:
+            logger.warning(f"Failed to read cache file {path}: {e}")
+            return None
+
+    def _save_to_cache(
+        self, key: str, query: str, country: Optional[str], language: Optional[str],
+        num_results: int, results: List[Dict]
+    ) -> None:
+        path = self._cache_path(key)
+        payload = {
+            "query": query,
+            "country": country,
+            "language": language,
+            "num_results": num_results,
+            "cached_at": datetime.now().isoformat(),
+            "results": results,
+        }
+        try:
+            path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            logger.debug(f"Cached {len(results)} results → {path.name}")
+        except Exception as e:
+            logger.warning(f"Failed to write cache file {path}: {e}")
 
     def _search_serpapi(
         self,

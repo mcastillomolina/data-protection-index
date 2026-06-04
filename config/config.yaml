@@ -32,6 +32,7 @@ pipeline:
   enable_deduplication: true
   enable_caching: true
   cache_dir: "data/cache"
+  cache_ttl_seconds: 2592000  # 30 days
 
 output:
   directory: "data/outputs"

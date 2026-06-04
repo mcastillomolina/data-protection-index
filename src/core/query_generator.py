@@ -5,7 +5,12 @@ This module uses an LLM to generate targeted search queries for finding
 specific legal documents.
 """
 
+import hashlib
+import json
+from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
+
 from loguru import logger
 
 from src.clients.llm_client import LLMClient
@@ -31,21 +36,20 @@ class QueryGenerator:
         llm_client: LLMClient,
         temperature: float = 0.5,
         max_tokens: int = 1500,
-        queries_per_document: int = 5
+        queries_per_document: int = 5,
+        cache_dir: Optional[Path] = None,
     ):
-        """
-        Initialize query generator.
-
-        Args:
-            llm_client: LLM client instance
-            temperature: Sampling temperature (0.5 recommended for query variety)
-            max_tokens: Maximum tokens for LLM response
-            queries_per_document: Target number of queries to generate per document
-        """
         self.llm_client = llm_client
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.queries_per_document = queries_per_document
+        self._cache_dir: Optional[Path] = None
+
+        if cache_dir is not None:
+            self._cache_dir = Path(cache_dir) / "queries"
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Query cache enabled — dir: {self._cache_dir}")
+
         logger.info(f"Initialized QueryGenerator (queries_per_doc={queries_per_document})")
 
     def generate_queries(
@@ -72,6 +76,13 @@ class QueryGenerator:
         logger.info(
             f"Generating queries for '{document.official_name}' in {country.name}"
         )
+
+        if self._cache_dir is not None:
+            key = self._query_cache_key(document.official_name, country.iso_code)
+            cached = self._load_query_cache(key)
+            if cached is not None:
+                logger.info(f"[CACHE HIT] Queries for '{document.official_name}' ({len(cached)} queries)")
+                return cached
 
         # Create prompt
         prompt = create_query_generation_prompt(
@@ -149,6 +160,9 @@ class QueryGenerator:
                 )
                 queries = queries[:self.queries_per_document]
 
+            if self._cache_dir is not None and queries:
+                self._save_query_cache(key, document.official_name, country.iso_code, queries)
+
             return queries
 
         except ValueError as e:
@@ -158,6 +172,38 @@ class QueryGenerator:
         except Exception as e:
             logger.error(f"Error generating queries: {e}")
             raise
+
+    def _query_cache_key(self, doc_name: str, country_iso: str) -> str:
+        raw = f"{doc_name}|{country_iso}|{self.queries_per_document}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+    def _load_query_cache(self, key: str) -> Optional[List[SearchQuery]]:
+        path = self._cache_dir / f"{key}.json"
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return [SearchQuery(**q) for q in data["queries"]]
+        except Exception as e:
+            logger.warning(f"Failed to read query cache {path}: {e}")
+            return None
+
+    def _save_query_cache(
+        self, key: str, doc_name: str, country_iso: str, queries: List[SearchQuery]
+    ) -> None:
+        path = self._cache_dir / f"{key}.json"
+        payload = {
+            "document_name": doc_name,
+            "country_iso": country_iso,
+            "queries_per_document": self.queries_per_document,
+            "cached_at": datetime.now().isoformat(),
+            "queries": [q.model_dump() for q in queries],
+        }
+        try:
+            path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            logger.debug(f"Cached {len(queries)} queries → {path.name}")
+        except Exception as e:
+            logger.warning(f"Failed to write query cache {path}: {e}")
 
     def generate_queries_for_multiple(
         self,

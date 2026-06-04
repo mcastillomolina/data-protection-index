@@ -36,6 +36,7 @@ from src.core.country_resolver import resolve_country
 from src.core.language_detector import LanguageDetector
 from src.core.section_splitter import SectionSplitter
 from src.core.information_extractor import InformationExtractor
+from src.core.criterion_extractor import CriterionExtractor, _load_document_dimension
 from src.db.writer import DatabaseWriter
 from src.models.country import Country
 from src.models.document import DocumentWithResults, DiscoveryOutput
@@ -133,7 +134,8 @@ def discover_documents_for_country(
     generator = QueryGenerator(
         llm_client=llm_client,
         temperature=config.llm.temperature,
-        queries_per_document=queries_per_document
+        queries_per_document=queries_per_document,
+        cache_dir=Path(config.pipeline.cache_dir) if config.pipeline.enable_caching else None,
     )
 
     known_sources = country_metadata.get("search_hints", [])
@@ -318,6 +320,7 @@ def retrieve_documents_from_output(
     discovery_output: DiscoveryOutput,
     config: Config,
     verbose: bool = False,
+    output_dir: Optional[Path] = None,
 ) -> RetrievalOutput:
     """
     Phase 2: Download and extract text from the URLs discovered in Phase 1.
@@ -329,6 +332,8 @@ def retrieve_documents_from_output(
         discovery_output: Phase 1 output with scored URLs per document
         config: Configuration object
         verbose: Whether verbose logging is enabled
+        output_dir: If provided, load previously extracted content from
+            retrieval_results_latest.json to skip re-downloading cached URLs.
 
     Returns:
         RetrievalOutput with extracted text per document
@@ -338,6 +343,23 @@ def retrieve_documents_from_output(
     logger.info("="*60)
     logger.info("Phase 2: Document Retrieval & Text Extraction")
     logger.info("="*60)
+
+    # Build URL → DocumentContent cache from previous retrieval run
+    url_cache: dict[str, DocumentContent] = {}
+    if output_dir is not None:
+        country_dir = output_dir / discovery_output.country.name.replace(" ", "_")
+        cached_retrieval = country_dir / "retrieval_results_latest.json"
+        if cached_retrieval.exists():
+            try:
+                with open(cached_retrieval, encoding="utf-8") as f:
+                    prev = json.load(f)
+                for rd in prev.get("documents", []):
+                    c = rd.get("content")
+                    if c and c.get("extraction_success") and c.get("extracted_text"):
+                        url_cache[c["url"]] = DocumentContent(**c)
+                logger.info(f"Retrieval cache loaded: {len(url_cache)} previously extracted URL(s)")
+            except Exception as e:
+                logger.warning(f"Could not load retrieval cache from {cached_retrieval}: {e}")
 
     retriever = DocumentRetriever(
         timeout=config.retrieval.timeout,
@@ -373,6 +395,13 @@ def retrieve_documents_from_output(
         successful_url: Optional[str] = None
 
         for url in attempted_urls:
+            # Check cache before attempting HTTP download
+            if url in url_cache:
+                content = url_cache[url]
+                successful_url = url
+                logger.info(f"[CACHE HIT] '{doc.official_name}' — {content.char_count:,} chars from {url}")
+                break
+
             result = retriever.retrieve(url)
             if result is None:
                 continue
@@ -525,15 +554,16 @@ def extract_information_from_retrieval(
     logger.info("Phase 3: Information Extraction")
     logger.info("=" * 60)
 
+    country = retrieval_output.country
+
     lang_detector = LanguageDetector()
     section_splitter = SectionSplitter()
     llm_client = config.get_extraction_llm_client()
-    extractor = InformationExtractor(
+    extractor = CriterionExtractor(
         llm_client=llm_client,
         min_section_chars=config.extraction.min_section_chars,
+        country_name=country.name,
     )
-
-    country = retrieval_output.country
     country_id: Optional[int] = None
     if db_writer:
         country_id = db_writer.upsert_country(country)
@@ -550,6 +580,8 @@ def extract_information_from_retrieval(
     for retrieved_doc in docs_iter:
         doc = retrieved_doc.document
         doc_start = datetime.now()
+        dimension = _load_document_dimension(doc.document_type)
+        logger.info(f"CriterionExtractor — {doc.document_type} — dimension: {dimension}")
 
         if retrieved_doc.status != "success" or retrieved_doc.content is None:
             logger.warning(f"Skipping '{doc.official_name}' — no retrieved text")
@@ -624,6 +656,7 @@ def extract_information_from_retrieval(
                     doc_id, sr,
                     llm_provider=config.extraction.llm_provider,
                     llm_model=config.extraction.llm_model,
+                    extraction_dimension=dimension,
                 )
             db_writer.upsert_document_extraction(
                 doc_id,
@@ -634,6 +667,7 @@ def extract_information_from_retrieval(
                     "split_tier_used": tier_used,
                     "detected_language": detected_lang,
                     "status": status,
+                    "extraction_dimension": dimension,
                 },
             )
 
@@ -918,6 +952,7 @@ Examples:
                 discovery_output=output,
                 config=config,
                 verbose=args.verbose,
+                output_dir=output_dir,
             )
 
             if not args.no_save:

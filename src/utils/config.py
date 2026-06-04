@@ -41,6 +41,7 @@ class PipelineConfig:
     enable_deduplication: bool
     enable_caching: bool
     cache_dir: str
+    cache_ttl_seconds: int
 
 
 @dataclass
@@ -314,7 +315,10 @@ class Config:
                 provider=self.search.provider,
                 api_key=self.serpapi_key,
                 rate_limit_delay=self.search.rate_limit_delay,
-                timeout=self.search.timeout
+                timeout=self.search.timeout,
+                enable_caching=self.pipeline.enable_caching,
+                cache_dir=self.pipeline.cache_dir,
+                cache_ttl_seconds=self.pipeline.cache_ttl_seconds,
             )
         else:
             raise ValueError(f"Unknown search provider: {self.search.provider}")
