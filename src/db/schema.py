@@ -246,6 +246,69 @@ INSERT INTO trusted_sources (domain, source_type, pi_criterion_number, requires_
 ON CONFLICT DO NOTHING;
 """
 
+# ── F.1 ──────────────────────────────────────────────────────────────────────
+CREATE_CRITERION_SCORES = """
+CREATE TABLE IF NOT EXISTS criterion_scores (
+    id                   SERIAL PRIMARY KEY,
+    country_id           INTEGER REFERENCES countries(id),
+    criterion_number     INTEGER NOT NULL,
+    criterion_name       VARCHAR(100),
+    dimension            VARCHAR(20),
+
+    legal_subscore       FLOAT,
+    enforcement_subscore FLOAT,
+    criterion_score      FLOAT NOT NULL,
+
+    confidence           VARCHAR(10),
+    evidence_count       INTEGER,
+    information_opacity  BOOLEAN DEFAULT FALSE,
+
+    rationale            TEXT,
+    evidence_gaps        TEXT,
+    key_sources          JSONB,
+
+    model_used           VARCHAR(100),
+    reference_year       INTEGER,
+
+    created_at           TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE (country_id, criterion_number, reference_year, model_used)
+);
+
+CREATE INDEX IF NOT EXISTS idx_criterion_scores_country
+  ON criterion_scores(country_id);
+CREATE INDEX IF NOT EXISTS idx_criterion_scores_criterion
+  ON criterion_scores(criterion_number);
+"""
+
+# ── G.1 ──────────────────────────────────────────────────────────────────────
+CREATE_COUNTRY_INDEX_SCORES = """
+CREATE TABLE IF NOT EXISTS country_index_scores (
+    id                   SERIAL PRIMARY KEY,
+    country_id           INTEGER REFERENCES countries(id),
+    reference_year       INTEGER NOT NULL,
+
+    legal_score          FLOAT,
+    enforcement_score    FLOAT,
+    final_score          FLOAT NOT NULL,
+
+    pi_category          VARCHAR(100),
+    rank                 INTEGER,
+
+    criteria_count       INTEGER,
+    missing_criteria     JSONB,
+    opacity_affected     INTEGER,
+
+    model_used           VARCHAR(100),
+    confidence_weighting BOOLEAN DEFAULT TRUE,
+    missing_strategy     VARCHAR(20),
+
+    created_at           TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE (country_id, reference_year, model_used)
+);
+"""
+
 ALL_STATEMENTS = [
     CREATE_CRITERIA,
     CREATE_COUNTRIES,
@@ -261,4 +324,6 @@ ALL_STATEMENTS = [
     CREATE_ENFORCEMENT_RECORDS,
     CREATE_TRUSTED_SOURCES,
     SEED_TRUSTED_SOURCES,
+    CREATE_CRITERION_SCORES,
+    CREATE_COUNTRY_INDEX_SCORES,
 ]

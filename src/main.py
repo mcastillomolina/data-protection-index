@@ -783,6 +783,86 @@ def print_extraction_summary(output: ExtractionOutput) -> None:
     print("\n" + "=" * 70 + "\n")
 
 
+def _get_country_info_for_scoring(
+    db_writer: "DatabaseWriter",
+    dsn: str,
+    country_name: str,
+) -> tuple[int, str, str, str]:
+    """
+    Fetch country_id, canonical name, iso_code, and information_environment
+    from the DB for use by CriterionScorer.
+
+    Exits with code 1 if the country is not found.
+    Returns (country_id, name, iso_code, information_environment).
+    information_environment defaults to 'open' if the column does not yet exist.
+    """
+    import psycopg2
+    import psycopg2.extras
+
+    conn = psycopg2.connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'countries'
+                  AND column_name = 'information_environment'
+                """
+            )
+            has_ie_col = cur.fetchone() is not None
+
+        select_cols = (
+            "id, name, iso_code, information_environment"
+            if has_ie_col
+            else "id, name, iso_code"
+        )
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT {select_cols}
+                FROM countries
+                WHERE name ILIKE %s OR %s = ANY(aliases)
+                LIMIT 1
+                """,
+                (country_name, country_name),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        logger.error(
+            f"Country '{country_name}' not found in the database. "
+            "Run the full pipeline first to populate it."
+        )
+        sys.exit(1)
+
+    info_env = row.get("information_environment", "open") or "open"
+    return int(row["id"]), row["name"], row["iso_code"].strip(), info_env
+
+
+def _print_scoring_summary(
+    country_name: str,
+    reference_year: int,
+    scores: list,
+) -> None:
+    """Print one line per scored criterion to stdout."""
+    print("\n" + "=" * 70)
+    print(f"SCORING SUMMARY: {country_name} ({reference_year})")
+    print("=" * 70)
+    print(f"{'#':<4} {'Criterion':<45} {'Score':<7} {'Conf':<8} {'Opacity'}")
+    print("-" * 70)
+    for s in sorted(scores, key=lambda x: x.criterion_number):
+        opacity_flag = "[opacity]" if s.information_opacity else ""
+        print(
+            f"{s.criterion_number:<4} {s.criterion_name:<45} "
+            f"{s.criterion_score:<7.2f} {s.confidence:<8} {opacity_flag}"
+        )
+    print("=" * 70)
+    print(f"Total scored: {len(scores)}/14 criteria")
+    print()
+
+
 def _create_empty_output(country: Country, start_time: datetime) -> DiscoveryOutput:
     """Create an empty DiscoveryOutput for failed pipelines."""
     return DiscoveryOutput(
@@ -895,6 +975,20 @@ Examples:
         action="store_true",
         help="Skip Phases 1–3; embed pending sections for a country already in the DB"
     )
+    parser.add_argument(
+        "--score-only",
+        action="store_true",
+        help=(
+            "Run Phase 4 scoring only (Phases 1–3 + embeddings must already be complete). "
+            "Scores all 14 PI criteria for the country and writes to criterion_scores table."
+        ),
+    )
+    parser.add_argument(
+        "--year",
+        type=int,
+        default=None,
+        help="Reference year for scoring (default: current year)",
+    )
 
     args = parser.parse_args()
 
@@ -924,6 +1018,20 @@ Examples:
             else:
                 logger.warning("DATABASE_URL not set — skipping DB writes")
 
+        # --score-only mutual-exclusion guard
+        if args.score_only:
+            for flag_name, flag_val in [
+                ("--discovery-only", args.discovery_only),
+                ("--extraction-only", args.extraction_only),
+                ("--embeddings-only", args.embeddings_only),
+            ]:
+                if flag_val:
+                    logger.error(f"--score-only cannot be combined with {flag_name}")
+                    sys.exit(1)
+            if not dsn:
+                logger.error("--score-only requires DATABASE_URL to be set")
+                sys.exit(1)
+
         # --embeddings-only requires a DB connection
         if args.embeddings_only and not dsn:
             logger.error("--embeddings-only requires DATABASE_URL to be set")
@@ -949,6 +1057,46 @@ Examples:
             n = populator.populate(country_id)
             print(f"\n✅ Embedded {n} sections for '{args.country}' "
                   f"using {embedding_client.model}")
+            db_writer.close()
+            sys.exit(0)
+
+        # ------------------------------------------------------------------
+        # --score-only: skip Phases 1–3; score all 14 criteria from DB
+        # ------------------------------------------------------------------
+        if args.score_only:
+            if not db_writer:
+                db_writer = DatabaseWriter(dsn)
+                db_writer.ensure_schema()
+
+            reference_year = args.year if args.year else datetime.now().year
+
+            country_id, country_name_resolved, iso_code, info_env = (
+                _get_country_info_for_scoring(db_writer, dsn, args.country)
+            )
+
+            embedding_client = config.get_embedding_client()
+            llm_client = config.get_llm_client()
+
+            from src.core.criterion_scorer import CriterionScorer
+            scorer = CriterionScorer(
+                llm_client=llm_client,
+                embedding_client=embedding_client,
+                dsn=dsn,
+                model_name=config.llm.model,
+                cosine_threshold=config.scoring.cosine_similarity_threshold,
+                max_sections=config.scoring.max_sections_per_criterion,
+            )
+
+            scores = scorer.score_all_criteria(
+                country_id=country_id,
+                country_name=country_name_resolved,
+                country_code=iso_code,
+                reference_year=reference_year,
+                information_environment=info_env,
+            )
+
+            _print_scoring_summary(args.country, reference_year, scores)
+
             db_writer.close()
             sys.exit(0)
 
