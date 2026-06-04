@@ -8,6 +8,69 @@ search queries to find specific legal documents.
 from typing import List, Dict, Any
 
 
+CRITERION_QUERY_HINTS: Dict[str, Dict] = {
+    "constitution": {
+        "hint": "Look for the official constitutional text and any amendments related to privacy, data protection, or communications secrecy.",
+        "trusted_domains": ["constituteproject.org", "venice.coe.int"],
+        "example_queries": [
+            '"{country}" constitution "right to privacy" OR "data protection" article',
+            'site:constituteproject.org "{country}"',
+        ],
+    },
+    "enforcement_report": {
+        "hint": "Look for DPA enforcement decisions, fines issued, annual reports, and case outcomes. Prefer GDPRhub and official DPA sites.",
+        "trusted_domains": ["gdprhub.eu", "edpb.europa.eu"],
+        "example_queries": [
+            'site:gdprhub.eu "{country}"',
+            '"{country}" data protection authority enforcement fine sanction {year}',
+            '"{country}" DPA annual report {year}',
+        ],
+    },
+    "surveillance_law": {
+        "hint": "Look for laws on CCTV regulation, wiretapping, lawful interception, and state surveillance powers.",
+        "trusted_domains": ["privacyinternational.org", "eff.org", "accessnow.org"],
+        "example_queries": [
+            '"{country}" surveillance law interception wiretapping legal framework',
+            '"{country}" CCTV regulation privacy law',
+            'site:privacyinternational.org "{country}" surveillance',
+        ],
+    },
+    "international_treaty": {
+        "hint": "Look for treaties signed: Budapest Convention on Cybercrime, Treaty of Prum, bilateral data-sharing agreements.",
+        "trusted_domains": ["treaty.un.org", "coe.int"],
+        "example_queries": [
+            '"{country}" "Budapest Convention" cybercrime ratified',
+            '"{country}" data sharing agreement law enforcement treaty',
+            'site:coe.int "{country}" convention privacy',
+        ],
+    },
+    "dpa_annual_report": {
+        "hint": "Look for official DPA annual reports with staffing numbers, budget, complaints received, investigations opened, fines issued.",
+        "trusted_domains": [],
+        "example_queries": [
+            '"{country}" data protection authority annual report {year}',
+            '"{country}" DPA budget staff independence report',
+        ],
+    },
+    "biometrics_id_law": {
+        "hint": "Look for national ID card law, biometric passport regulation, and any central biometric database legislation.",
+        "trusted_domains": [],
+        "example_queries": [
+            '"{country}" national identity card biometrics law',
+            '"{country}" biometric passport fingerprint database regulation',
+        ],
+    },
+    "workplace_privacy_law": {
+        "hint": "Look for labor laws, workplace monitoring regulations, employee data protection guidelines.",
+        "trusted_domains": [],
+        "example_queries": [
+            '"{country}" workplace monitoring privacy law employee',
+            '"{country}" employee surveillance regulation data protection',
+        ],
+    },
+}
+
+
 # JSON schema for query generation response
 QUERY_GENERATION_SCHEMA = {
     "type": "object",
@@ -118,8 +181,24 @@ Document Information:
     if alternate_names:
         prompt += f"- Alternate Names: {', '.join(alternate_names)}\n"
 
-    if known_sources:
-        prompt += f"- Known Authoritative Sources: {', '.join(known_sources)}\n"
+    # Merge hint trusted_domains into known_sources
+    hints = CRITERION_QUERY_HINTS.get(document_type)
+    merged_sources = list(known_sources) if known_sources else []
+    if hints:
+        for domain in hints["trusted_domains"]:
+            if domain not in merged_sources:
+                merged_sources.append(domain)
+
+    if merged_sources:
+        prompt += f"- Known Authoritative Sources: {', '.join(merged_sources)}\n"
+
+    if hints:
+        prompt += f"\nDocument-type search guidance:\n"
+        prompt += f"  Hint: {hints['hint']}\n"
+        if hints["example_queries"]:
+            prompt += "  Example query patterns (adapt to the actual document and country):\n"
+            for eq in hints["example_queries"]:
+                prompt += f"    - {eq}\n"
 
     prompt += f"""
 Generate 3-5 search queries with different strategies:

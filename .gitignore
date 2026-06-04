@@ -58,3 +58,5 @@ htmlcov/
 /garbage/
 /claude/
 /data/outputs/
+
+notebooks/

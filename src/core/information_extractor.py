@@ -17,8 +17,30 @@ from src.prompts.information_extraction import (
     build_extraction_prompt,
 )
 
-_LIST_FIELDS = ("key_provisions", "data_subject_rights", "penalties", "lawful_basis")
-_SCALAR_FIELDS = ("enforcement_body",)
+_LIST_FIELDS = (
+    "key_provisions",
+    "data_subject_rights",
+    "statutory_penalties",
+    "actual_sanctions",
+    "lawful_basis",
+    "constitutional_articles",
+    "treaties_signed",
+)
+_SCALAR_FIELDS = (
+    "enforcement_body",
+    "constitutional_privacy_right",
+    "data_retention_period",
+    "interception_legal_standard",
+    "biometric_legal_basis",
+    "dpa_exists",
+    "dpa_independence",
+    "dpa_staff_count",
+    "sanctions_count",
+    "sanctions_total_amount",
+    "cctv_regulatory_status",
+    "border_biometrics_deployed",
+    "information_opacity_flag",
+)
 _NOTE_FIELD = "notes"
 
 
@@ -153,7 +175,7 @@ class InformationExtractor:
             for f in _SCALAR_FIELDS:
                 if agg[f] is None:
                     val = fields.get(f)
-                    if val:
+                    if val is not None:
                         agg[f] = val
 
             note = fields.get(_NOTE_FIELD)
