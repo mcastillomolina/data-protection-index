@@ -783,6 +783,86 @@ def print_extraction_summary(output: ExtractionOutput) -> None:
     print("\n" + "=" * 70 + "\n")
 
 
+def _get_country_info_for_scoring(
+    db_writer: "DatabaseWriter",
+    dsn: str,
+    country_name: str,
+) -> tuple[int, str, str, str]:
+    """
+    Fetch country_id, canonical name, iso_code, and information_environment
+    from the DB for use by CriterionScorer.
+
+    Exits with code 1 if the country is not found.
+    Returns (country_id, name, iso_code, information_environment).
+    information_environment defaults to 'open' if the column does not yet exist.
+    """
+    import psycopg2
+    import psycopg2.extras
+
+    conn = psycopg2.connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'countries'
+                  AND column_name = 'information_environment'
+                """
+            )
+            has_ie_col = cur.fetchone() is not None
+
+        select_cols = (
+            "id, name, iso_code, information_environment"
+            if has_ie_col
+            else "id, name, iso_code"
+        )
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT {select_cols}
+                FROM countries
+                WHERE name ILIKE %s OR %s = ANY(aliases)
+                LIMIT 1
+                """,
+                (country_name, country_name),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        logger.error(
+            f"Country '{country_name}' not found in the database. "
+            "Run the full pipeline first to populate it."
+        )
+        sys.exit(1)
+
+    info_env = row.get("information_environment", "open") or "open"
+    return int(row["id"]), row["name"], row["iso_code"].strip(), info_env
+
+
+def _print_scoring_summary(
+    country_name: str,
+    reference_year: int,
+    scores: list,
+) -> None:
+    """Print one line per scored criterion to stdout."""
+    print("\n" + "=" * 70)
+    print(f"SCORING SUMMARY: {country_name} ({reference_year})")
+    print("=" * 70)
+    print(f"{'#':<4} {'Criterion':<45} {'Score':<7} {'Conf':<8} {'Opacity'}")
+    print("-" * 70)
+    for s in sorted(scores, key=lambda x: x.criterion_number):
+        opacity_flag = "[opacity]" if s.information_opacity else ""
+        print(
+            f"{s.criterion_number:<4} {s.criterion_name:<45} "
+            f"{s.criterion_score:<7.2f} {s.confidence:<8} {opacity_flag}"
+        )
+    print("=" * 70)
+    print(f"Total scored: {len(scores)}/14 criteria")
+    print()
+
+
 def _create_empty_output(country: Country, start_time: datetime) -> DiscoveryOutput:
     """Create an empty DiscoveryOutput for failed pipelines."""
     return DiscoveryOutput(
@@ -823,8 +903,13 @@ Examples:
 
     parser.add_argument(
         "country",
+        nargs="?",
         type=str,
-        help="Country name (e.g., 'Chile', 'Germany', 'United Kingdom')"
+        default=None,
+        help=(
+            "Country name (e.g., 'Chile', 'Germany', 'United Kingdom'). "
+            "Not required for --score-all or --export-index."
+        ),
     )
     parser.add_argument(
         "--config",
@@ -895,6 +980,58 @@ Examples:
         action="store_true",
         help="Skip Phases 1–3; embed pending sections for a country already in the DB"
     )
+    parser.add_argument(
+        "--score-only",
+        action="store_true",
+        help=(
+            "Run Phase 4 scoring only (Phases 1–3 + embeddings must already be complete). "
+            "Scores all 14 PI criteria for the country and writes to criterion_scores table."
+        ),
+    )
+    parser.add_argument(
+        "--year",
+        type=int,
+        default=None,
+        help="Reference year for scoring (default: current year)",
+    )
+    parser.add_argument(
+        "--fetch-external",
+        action="store_true",
+        help=(
+            "Fetch external source data (Freedom House, V-Dem, RSF, GDPRhub) "
+            "for the given country into external_indicators table. Requires country arg."
+        ),
+    )
+    parser.add_argument(
+        "--score-all",
+        action="store_true",
+        help=(
+            "Score all countries in the DB that have embedded sections. "
+            "Writes to criterion_scores. No country arg required."
+        ),
+    )
+    parser.add_argument(
+        "--benchmark-models",
+        action="store_true",
+        help=(
+            "Run CriterionScorer with each model in scoring.benchmark_models from config. "
+            "Writes one row per model to criterion_scores. Requires country arg."
+        ),
+    )
+    parser.add_argument(
+        "--export-index",
+        action="store_true",
+        help=(
+            "Aggregate criterion scores, rank countries, and export index to "
+            "data/outputs/index/. No country arg required. Use with --format."
+        ),
+    )
+    parser.add_argument(
+        "--format",
+        choices=["csv", "json"],
+        default="csv",
+        help="Export format for --export-index (default: csv).",
+    )
 
     args = parser.parse_args()
 
@@ -924,6 +1061,241 @@ Examples:
             else:
                 logger.warning("DATABASE_URL not set — skipping DB writes")
 
+        # ------------------------------------------------------------------
+        # Validate: country is required unless a no-country flag is set
+        # ------------------------------------------------------------------
+        _no_country_flags = args.score_all or args.export_index
+        if args.country is None and not _no_country_flags:
+            logger.error(
+                "A country name is required unless you use --score-all or --export-index."
+            )
+            sys.exit(1)
+
+        # ------------------------------------------------------------------
+        # --fetch-external: ingest institutional data for one country
+        # ------------------------------------------------------------------
+        if args.fetch_external:
+            if args.country is None:
+                logger.error("--fetch-external requires a country name argument")
+                sys.exit(1)
+            if not dsn:
+                logger.error("--fetch-external requires DATABASE_URL to be set")
+                sys.exit(1)
+            if not db_writer:
+                db_writer = DatabaseWriter(dsn)
+                db_writer.ensure_schema()
+
+            reference_year = args.year if args.year else datetime.now().year
+            country_id, country_name_resolved, iso_code, _ = (
+                _get_country_info_for_scoring(db_writer, dsn, args.country)
+            )
+
+            from src.core.external_source_fetcher import ExternalSourceFetcher
+            fetcher = ExternalSourceFetcher(dsn=dsn)
+            results = fetcher.fetch_all(
+                country_iso=iso_code,
+                country_id=country_id,
+                year=reference_year,
+                country_name=country_name_resolved,
+            )
+            print(f"\n✅ External sources fetched for '{country_name_resolved}':")
+            for source, count in results.items():
+                print(f"   {source}: {count} row(s) written")
+            db_writer.close()
+            sys.exit(0)
+
+        # ------------------------------------------------------------------
+        # --score-all: score all countries with embedded sections
+        # ------------------------------------------------------------------
+        if args.score_all:
+            for flag_name, flag_val in [
+                ("--discovery-only",  args.discovery_only),
+                ("--extraction-only", args.extraction_only),
+                ("--embeddings-only", args.embeddings_only),
+                ("--score-only",      args.score_only),
+                ("--benchmark-models", args.benchmark_models),
+            ]:
+                if flag_val:
+                    logger.error(f"--score-all cannot be combined with {flag_name}")
+                    sys.exit(1)
+            if not dsn:
+                logger.error("--score-all requires DATABASE_URL to be set")
+                sys.exit(1)
+            if not db_writer:
+                db_writer = DatabaseWriter(dsn)
+                db_writer.ensure_schema()
+
+            reference_year = args.year if args.year else datetime.now().year
+
+            import psycopg2 as _psycopg2
+            import psycopg2.extras as _extras
+            _conn = _psycopg2.connect(dsn)
+            try:
+                with _conn.cursor(cursor_factory=_extras.RealDictCursor) as _cur:
+                    _cur.execute(
+                        """
+                        SELECT DISTINCT d.country_id
+                        FROM documents d
+                        JOIN section_extractions se ON se.document_id = d.id
+                        WHERE se.embedding IS NOT NULL
+                        """
+                    )
+                    _country_ids = [r["country_id"] for r in _cur.fetchall()]
+            finally:
+                _conn.close()
+
+            if not _country_ids:
+                logger.warning("--score-all: no countries with embedded sections found in DB")
+                db_writer.close()
+                sys.exit(0)
+
+            logger.info(f"--score-all: scoring {len(_country_ids)} country(ies)")
+            embedding_client = config.get_embedding_client()
+            llm_client = config.get_llm_client()
+
+            from src.core.criterion_scorer import CriterionScorer as _CS
+            scorer = _CS(
+                llm_client=llm_client,
+                embedding_client=embedding_client,
+                dsn=dsn,
+                model_name=config.llm.model,
+                cosine_threshold=config.scoring.cosine_similarity_threshold,
+                max_sections=config.scoring.max_sections_per_criterion,
+            )
+
+            for _cid in _country_ids:
+                _conn2 = _psycopg2.connect(dsn)
+                try:
+                    with _conn2.cursor(cursor_factory=_extras.RealDictCursor) as _cur2:
+                        _cur2.execute(
+                            "SELECT id, name, iso_code FROM countries WHERE id = %s",
+                            (_cid,),
+                        )
+                        _crow = _cur2.fetchone()
+                finally:
+                    _conn2.close()
+                if _crow is None:
+                    logger.warning(f"--score-all: country_id={_cid} not found — skipping")
+                    continue
+                _scores = scorer.score_all_criteria(
+                    country_id=_crow["id"],
+                    country_name=_crow["name"],
+                    country_code=_crow["iso_code"].strip(),
+                    reference_year=reference_year,
+                )
+                _print_scoring_summary(_crow["name"], reference_year, _scores)
+
+            db_writer.close()
+            sys.exit(0)
+
+        # ------------------------------------------------------------------
+        # --benchmark-models: score one country with multiple models
+        # ------------------------------------------------------------------
+        if args.benchmark_models:
+            if args.country is None:
+                logger.error("--benchmark-models requires a country name argument")
+                sys.exit(1)
+            if args.score_all or args.score_only:
+                logger.error("--benchmark-models cannot be combined with --score-all or --score-only")
+                sys.exit(1)
+            if not dsn:
+                logger.error("--benchmark-models requires DATABASE_URL to be set")
+                sys.exit(1)
+            if not config.scoring.benchmark_models:
+                logger.error(
+                    "scoring.benchmark_models is empty in config.yaml — "
+                    "add model strings to use --benchmark-models"
+                )
+                sys.exit(1)
+            if not db_writer:
+                db_writer = DatabaseWriter(dsn)
+                db_writer.ensure_schema()
+
+            reference_year = args.year if args.year else datetime.now().year
+            country_id, country_name_resolved, iso_code, info_env = (
+                _get_country_info_for_scoring(db_writer, dsn, args.country)
+            )
+            embedding_client = config.get_embedding_client()
+
+            from src.core.criterion_scorer import CriterionScorer as _CS2
+            for model_str in config.scoring.benchmark_models:
+                logger.info(f"--benchmark-models: scoring with model '{model_str}'")
+                # model_str format: "provider/model-name"
+                if "/" in model_str:
+                    _provider, _model = model_str.split("/", 1)
+                else:
+                    _provider, _model = config.llm.provider, model_str
+
+                # Temporarily override config to build correct client
+                _orig_provider = config.llm.provider
+                _orig_model    = config.llm.model
+                config.llm.provider = _provider
+                config.llm.model    = _model
+                try:
+                    _bm_llm = config.get_llm_client()
+                finally:
+                    config.llm.provider = _orig_provider
+                    config.llm.model    = _orig_model
+
+                _bm_scorer = _CS2(
+                    llm_client=_bm_llm,
+                    embedding_client=embedding_client,
+                    dsn=dsn,
+                    model_name=model_str,
+                    cosine_threshold=config.scoring.cosine_similarity_threshold,
+                    max_sections=config.scoring.max_sections_per_criterion,
+                )
+                _bm_scores = _bm_scorer.score_all_criteria(
+                    country_id=country_id,
+                    country_name=country_name_resolved,
+                    country_code=iso_code,
+                    reference_year=reference_year,
+                    information_environment=info_env,
+                )
+                _print_scoring_summary(f"{args.country} [{model_str}]", reference_year, _bm_scores)
+
+            db_writer.close()
+            sys.exit(0)
+
+        # ------------------------------------------------------------------
+        # --export-index: aggregate, rank, and export all countries
+        # ------------------------------------------------------------------
+        if args.export_index:
+            if not dsn:
+                logger.error("--export-index requires DATABASE_URL to be set")
+                sys.exit(1)
+            if not db_writer:
+                db_writer = DatabaseWriter(dsn)
+                db_writer.ensure_schema()
+
+            reference_year = args.year if args.year else datetime.now().year
+
+            from src.core.index_aggregator import IndexAggregator
+            aggregator = IndexAggregator(dsn=dsn, scoring_config=config.scoring)
+            ranked = aggregator.rank_countries(reference_year=reference_year, model_used=None)
+            out_path = aggregator.export_index(
+                reference_year=reference_year,
+                model_used=None,
+                fmt=args.format,
+            )
+            print(f"\n✅ Index exported ({len(ranked)} countries) → {out_path}")
+            db_writer.close()
+            sys.exit(0)
+
+        # --score-only mutual-exclusion guard
+        if args.score_only:
+            for flag_name, flag_val in [
+                ("--discovery-only", args.discovery_only),
+                ("--extraction-only", args.extraction_only),
+                ("--embeddings-only", args.embeddings_only),
+            ]:
+                if flag_val:
+                    logger.error(f"--score-only cannot be combined with {flag_name}")
+                    sys.exit(1)
+            if not dsn:
+                logger.error("--score-only requires DATABASE_URL to be set")
+                sys.exit(1)
+
         # --embeddings-only requires a DB connection
         if args.embeddings_only and not dsn:
             logger.error("--embeddings-only requires DATABASE_URL to be set")
@@ -949,6 +1321,46 @@ Examples:
             n = populator.populate(country_id)
             print(f"\n✅ Embedded {n} sections for '{args.country}' "
                   f"using {embedding_client.model}")
+            db_writer.close()
+            sys.exit(0)
+
+        # ------------------------------------------------------------------
+        # --score-only: skip Phases 1–3; score all 14 criteria from DB
+        # ------------------------------------------------------------------
+        if args.score_only:
+            if not db_writer:
+                db_writer = DatabaseWriter(dsn)
+                db_writer.ensure_schema()
+
+            reference_year = args.year if args.year else datetime.now().year
+
+            country_id, country_name_resolved, iso_code, info_env = (
+                _get_country_info_for_scoring(db_writer, dsn, args.country)
+            )
+
+            embedding_client = config.get_embedding_client()
+            llm_client = config.get_llm_client()
+
+            from src.core.criterion_scorer import CriterionScorer
+            scorer = CriterionScorer(
+                llm_client=llm_client,
+                embedding_client=embedding_client,
+                dsn=dsn,
+                model_name=config.llm.model,
+                cosine_threshold=config.scoring.cosine_similarity_threshold,
+                max_sections=config.scoring.max_sections_per_criterion,
+            )
+
+            scores = scorer.score_all_criteria(
+                country_id=country_id,
+                country_name=country_name_resolved,
+                country_code=iso_code,
+                reference_year=reference_year,
+                information_environment=info_env,
+            )
+
+            _print_scoring_summary(args.country, reference_year, scores)
+
             db_writer.close()
             sys.exit(0)
 

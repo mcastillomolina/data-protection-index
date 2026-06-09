@@ -65,6 +65,11 @@ scoring:
   embedding_provider: "ollama"
   embedding_dims: 768
   ollama_base_url: "http://localhost:11434"
+  legal_weight: 0.40                  # weight for legal dimension in final score
+  enforcement_weight: 0.60            # weight for enforcement dimension in final score
+  missing_strategy: "exclude"         # "exclude" or "penalise_as_1"
+  confidence_weighting: true          # weight criterion scores by confidence level
+  benchmark_models: []                # model strings for --benchmark-models flag
 
 logging:
   level: "INFO"  # DEBUG, INFO, WARNING, ERROR

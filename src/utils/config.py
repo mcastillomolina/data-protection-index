@@ -99,6 +99,15 @@ class ScoringConfig:
     embedding_provider: str
     embedding_dims: int = 768
     ollama_base_url: str = "http://localhost:11434"
+    legal_weight: float = 0.40
+    enforcement_weight: float = 0.60
+    missing_strategy: str = "exclude"
+    confidence_weighting: bool = True
+    benchmark_models: List = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.benchmark_models is None:
+            self.benchmark_models = []
 
 
 class Config:
