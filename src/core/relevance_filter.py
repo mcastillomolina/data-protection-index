@@ -5,7 +5,11 @@ This module uses an LLM to score and filter search results by relevance
 to a specific document.
 """
 
-from typing import List
+import hashlib
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
 from loguru import logger
 
 from src.clients.llm_client import LLMClient
@@ -30,21 +34,20 @@ class RelevanceFilter:
         llm_client: LLMClient,
         temperature: float = 0.2,
         max_tokens: int = 4000,
-        min_relevance_score: float = 6.0
+        min_relevance_score: float = 6.0,
+        cache_dir: Optional[Path] = None,
     ):
-        """
-        Initialize relevance filter.
-
-        Args:
-            llm_client: LLM client instance
-            temperature: Sampling temperature (0.2 recommended for consistent scoring)
-            max_tokens: Maximum tokens for LLM response
-            min_relevance_score: Minimum score to consider relevant (0-10 scale)
-        """
         self.llm_client = llm_client
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.min_relevance_score = min_relevance_score
+        self._cache_dir: Optional[Path] = None
+
+        if cache_dir is not None:
+            self._cache_dir = Path(cache_dir) / "relevance"
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Relevance cache enabled — dir: {self._cache_dir}")
+
         logger.info(
             f"Initialized RelevanceFilter "
             f"(min_score={min_relevance_score}, temp={temperature})"
@@ -224,6 +227,16 @@ class RelevanceFilter:
             f"Filtering {len(results)} results in batches of {batch_size}"
         )
 
+        if self._cache_dir is not None:
+            key = self._relevance_cache_key(document.official_name, country_name, results)
+            cached = self._load_relevance_cache(key)
+            if cached is not None:
+                logger.info(
+                    f"[CACHE HIT] Relevance scores for '{document.official_name}' "
+                    f"({len(cached)} results)"
+                )
+                return cached[:top_n]
+
         all_scored = []
 
         # Process in batches
@@ -254,7 +267,50 @@ class RelevanceFilter:
 
         logger.info(f"Returning top {len(top_results)} results from {len(all_scored)} scored")
 
+        if self._cache_dir is not None and top_results:
+            self._save_relevance_cache(key, document.official_name, country_name, results, top_results)
+
         return top_results
+
+    def _relevance_cache_key(
+        self, doc_name: str, country_name: str, results: List[SearchResult]
+    ) -> str:
+        url_fingerprint = ",".join(sorted(r.url for r in results))
+        raw = f"{doc_name}|{country_name}|{url_fingerprint}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+    def _load_relevance_cache(self, key: str) -> Optional[List[ScoredResult]]:
+        path = self._cache_dir / f"{key}.json"
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return [ScoredResult(**r) for r in data["results"]]
+        except Exception as e:
+            logger.warning(f"Failed to read relevance cache {path}: {e}")
+            return None
+
+    def _save_relevance_cache(
+        self,
+        key: str,
+        doc_name: str,
+        country_name: str,
+        input_results: List[SearchResult],
+        scored: List[ScoredResult],
+    ) -> None:
+        path = self._cache_dir / f"{key}.json"
+        payload = {
+            "doc_name": doc_name,
+            "country_name": country_name,
+            "url_fingerprint": ",".join(sorted(r.url for r in input_results)),
+            "cached_at": datetime.now().isoformat(),
+            "results": [r.model_dump() for r in scored],
+        }
+        try:
+            path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            logger.debug(f"Cached {len(scored)} relevance results → {path.name}")
+        except Exception as e:
+            logger.warning(f"Failed to write relevance cache {path}: {e}")
 
     def get_official_results(
         self,

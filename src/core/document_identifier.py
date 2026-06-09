@@ -4,6 +4,10 @@ Document identifier using LLM.
 This module uses an LLM to identify relevant legal documents for a given country.
 """
 
+import hashlib
+import json
+from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
 from loguru import logger
 
@@ -30,19 +34,19 @@ class DocumentIdentifier:
         self,
         llm_client: LLMClient,
         temperature: float = 0.3,
-        max_tokens: int = 4000
+        max_tokens: int = 4000,
+        cache_dir: Optional[Path] = None,
     ):
-        """
-        Initialize document identifier.
-
-        Args:
-            llm_client: LLM client instance
-            temperature: Sampling temperature (0.3 recommended for consistency)
-            max_tokens: Maximum tokens for LLM response
-        """
         self.llm_client = llm_client
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self._cache_dir: Optional[Path] = None
+
+        if cache_dir is not None:
+            self._cache_dir = Path(cache_dir) / "documents"
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Document cache enabled — dir: {self._cache_dir}")
+
         logger.info("Initialized DocumentIdentifier")
 
     def identify_documents(
@@ -67,6 +71,13 @@ class DocumentIdentifier:
             Exception: If LLM call fails
         """
         logger.info(f"Identifying documents for {country.name}")
+
+        if self._cache_dir is not None:
+            key = self._doc_cache_key(country.iso_code, known_documents)
+            cached = self._load_doc_cache(key)
+            if cached is not None:
+                logger.info(f"[CACHE HIT] Documents for '{country.name}' ({len(cached)} docs)")
+                return cached
 
         # Create prompt
         prompt = create_identification_prompt(
@@ -135,6 +146,9 @@ class DocumentIdentifier:
                     f"Notes: {metadata.get('notes', 'None')}"
                 )
 
+            if self._cache_dir is not None and documents:
+                self._save_doc_cache(key, country.iso_code, known_documents, documents)
+
             return documents
 
         except ValueError as e:
@@ -144,6 +158,38 @@ class DocumentIdentifier:
         except Exception as e:
             logger.error(f"Error identifying documents: {e}")
             raise
+
+    def _doc_cache_key(self, country_iso: str, known_documents: Optional[dict]) -> str:
+        raw = f"{country_iso}|{json.dumps(known_documents or {}, sort_keys=True)}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+    def _load_doc_cache(self, key: str) -> Optional[List[DocumentMetadata]]:
+        path = self._cache_dir / f"{key}.json"
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return [DocumentMetadata(**d) for d in data["documents"]]
+        except Exception as e:
+            logger.warning(f"Failed to read document cache {path}: {e}")
+            return None
+
+    def _save_doc_cache(
+        self, key: str, country_iso: str, known_documents: Optional[dict],
+        documents: List[DocumentMetadata]
+    ) -> None:
+        path = self._cache_dir / f"{key}.json"
+        payload = {
+            "country_iso": country_iso,
+            "known_docs_fingerprint": key,
+            "cached_at": datetime.now().isoformat(),
+            "documents": [d.model_dump() for d in documents],
+        }
+        try:
+            path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            logger.debug(f"Cached {len(documents)} documents → {path.name}")
+        except Exception as e:
+            logger.warning(f"Failed to write document cache {path}: {e}")
 
     def identify_documents_simple(self, country_name: str) -> List[DocumentMetadata]:
         """

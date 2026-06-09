@@ -105,10 +105,12 @@ def discover_documents_for_country(
 
     # Step 1: Identify documents
     logger.info("\nStep 1/4: Identifying relevant documents...")
+    _cache_dir = Path(config.pipeline.cache_dir) if config.pipeline.enable_caching else None
     identifier = DocumentIdentifier(
         llm_client=llm_client,
         temperature=config.llm.temperature,
-        max_tokens=config.llm.max_tokens
+        max_tokens=config.llm.max_tokens,
+        cache_dir=_cache_dir,
     )
 
     known_docs = country_metadata.get("known_documents", {})
@@ -176,7 +178,8 @@ def discover_documents_for_country(
         llm_client=llm_client,
         temperature=0.2,  # Lower for consistent scoring
         max_tokens=config.llm.max_tokens,
-        min_relevance_score=config.pipeline.min_relevance_score
+        min_relevance_score=config.pipeline.min_relevance_score,
+        cache_dir=_cache_dir,
     )
 
     document_results = []
@@ -528,6 +531,7 @@ def extract_information_from_retrieval(
     config: Config,
     db_writer: Optional[DatabaseWriter],
     verbose: bool = False,
+    cached_extractions: Optional[dict] = None,
 ) -> ExtractionOutput:
     """
     Phase 3: Extract structured information from retrieved documents.
@@ -579,6 +583,13 @@ def extract_information_from_retrieval(
 
     for retrieved_doc in docs_iter:
         doc = retrieved_doc.document
+
+        if cached_extractions and doc.official_name in cached_extractions:
+            logger.info(f"[CACHE HIT] Extraction '{doc.official_name}' — skipping LLM calls")
+            doc_results.append(cached_extractions[doc.official_name])
+            successful += 1
+            continue
+
         doc_start = datetime.now()
         dimension = _load_document_dimension(doc.document_type)
         logger.info(f"CriterionExtractor — {doc.document_type} — dimension: {dimension}")
@@ -1032,6 +1043,14 @@ Examples:
         default="csv",
         help="Export format for --export-index (default: csv).",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help=(
+            "Disable all file caches for this run — forces fresh LLM and network calls. "
+            "Equivalent to setting pipeline.enable_caching: false in config.yaml."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1046,6 +1065,13 @@ Examples:
         # Load configuration
         config = Config(args.config)
         config.validate()
+
+        # --no-cache overrides config so every downstream reader sees it immediately
+        if args.no_cache:
+            config.pipeline.enable_caching = False
+
+        # Convenience variable used throughout main() for all cache-aware constructors
+        cache_dir = Path(config.pipeline.cache_dir) if config.pipeline.enable_caching else None
 
         # Determine output directory
         output_dir = args.output_dir if args.output_dir else Path(config.output.directory)
@@ -1182,6 +1208,7 @@ Examples:
                     country_name=_crow["name"],
                     country_code=_crow["iso_code"].strip(),
                     reference_year=reference_year,
+                    skip_if_scored=config.pipeline.enable_caching,
                 )
                 _print_scoring_summary(_crow["name"], reference_year, _scores)
 
@@ -1251,6 +1278,7 @@ Examples:
                     country_code=iso_code,
                     reference_year=reference_year,
                     information_environment=info_env,
+                    skip_if_scored=config.pipeline.enable_caching,
                 )
                 _print_scoring_summary(f"{args.country} [{model_str}]", reference_year, _bm_scores)
 
@@ -1357,6 +1385,7 @@ Examples:
                 country_code=iso_code,
                 reference_year=reference_year,
                 information_environment=info_env,
+                skip_if_scored=config.pipeline.enable_caching,
             )
 
             _print_scoring_summary(args.country, reference_year, scores)
@@ -1418,11 +1447,33 @@ Examples:
 
         # Phase 3: extraction
         if not args.skip_extraction and not args.discovery_only:
+            cached_extractions: dict = {}
+            if cache_dir is not None and args.country:
+                _country_dir = output_dir / args.country.replace(" ", "_")
+                _prev_extraction = _country_dir / "extraction_results_latest.json"
+                if _prev_extraction.exists():
+                    try:
+                        with open(_prev_extraction, encoding="utf-8") as _f:
+                            _prev = json.load(_f)
+                        from src.models.extraction import ExtractionOutput as _EO
+                        _prev_out = _EO.model_validate(_prev)
+                        cached_extractions = {
+                            d.document.official_name: d
+                            for d in _prev_out.documents
+                            if d.status != "failed"
+                        }
+                        logger.info(
+                            f"Extraction cache loaded: {len(cached_extractions)} doc(s)"
+                        )
+                    except Exception as _e:
+                        logger.warning(f"Could not load extraction cache: {_e}")
+
             extraction_output = extract_information_from_retrieval(
                 retrieval_output=retrieval_output,
                 config=config,
                 db_writer=db_writer,
                 verbose=args.verbose,
+                cached_extractions=cached_extractions,
             )
 
             if not args.no_save:
