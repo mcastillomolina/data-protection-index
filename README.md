@@ -394,6 +394,53 @@ Set `DATABASE_URL` in `.env` and run `docker compose up -d` before using Phase 3
 
 See [README_USAGE.md](README_USAGE.md) for detailed configuration guide.
 
+## Caching
+
+The pipeline caches every expensive operation so repeat runs are fast and free. All file caches are stored under `data/cache/`; phase output files double as caches for downstream phases.
+
+### Cache layers
+
+| Layer | Location | Keyed on | Phase |
+|---|---|---|---|
+| Document identification | `data/cache/documents/` | country ISO + known-docs fingerprint | P1 Step 1 |
+| Query generation | `data/cache/queries/` | doc name + ISO + n_queries | P1 Step 2 |
+| Web search results | `data/cache/search/` | query string + country + language | P1 Step 3 |
+| Relevance scoring | `data/cache/relevance/` | doc name + country + sorted URLs | P1 Step 4 |
+| Document retrieval | `data/outputs/{Country}/retrieval_results_latest.json` | per URL | P2 |
+| Extraction results | `data/outputs/{Country}/extraction_results_latest.json` | per document name | P3 |
+| Criterion scores | PostgreSQL `criterion_scores` table | country + criterion + year + model | P4 |
+
+### How it works per phase
+
+- **P1** — All four LLM/search steps check their cache first. A full cache hit means zero LLM calls and zero SerpAPI calls.
+- **P2** — URLs already present in the previous `retrieval_results_latest.json` are served from disk; only new URLs trigger HTTP downloads.
+- **P3** — Documents with a non-failed entry in `extraction_results_latest.json` are skipped entirely; their cached `aggregated_fields` flow straight into the output.
+- **P4** — Criteria already recorded in `criterion_scores` for the same model and year are returned from the DB without calling the LLM.
+
+### Disabling the cache
+
+**Per run** (recommended for first runs or debugging):
+```bash
+python -m src.main Canada --no-cache
+```
+
+**Permanently** — set in `config/config.yaml`:
+```yaml
+pipeline:
+  enable_caching: false
+```
+
+**Selectively** — delete the relevant directory or file:
+```bash
+rm -rf data/cache/documents/   # re-identify docs on next run
+rm -rf data/cache/search/      # re-execute web searches
+rm data/outputs/Canada/extraction_results_latest.json  # re-extract Canada
+```
+
+### Cache TTL
+
+Web search results (`data/cache/search/`) expire after **30 days** (controlled by `pipeline.cache_ttl_seconds` in `config.yaml`). All other file caches have no TTL — delete the file to force a refresh. PostgreSQL criterion scores are overwritten on re-run only when `--no-cache` is passed.
+
 ## Documentation
 
 - **[README_USAGE.md](README_USAGE.md)** - Complete usage guide

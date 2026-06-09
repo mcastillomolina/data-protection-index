@@ -64,12 +64,15 @@ class CriterionScorer:
         country_code: str,
         reference_year: int,
         information_environment: str = "open",
+        skip_if_scored: bool = False,
     ) -> list[CriterionScore]:
         """
         Score all 14 criteria for a country.
 
         Each score is written to criterion_scores before moving to the next.
         Returns the list of all successfully scored criteria.
+        If skip_if_scored=True, criteria already in criterion_scores are returned
+        from the DB without calling the LLM.
         """
         scores: list[CriterionScore] = []
         conn = psycopg2.connect(self._dsn)
@@ -87,6 +90,7 @@ class CriterionScorer:
                     criterion_number=criterion_number,
                     reference_year=reference_year,
                     information_environment=information_environment,
+                    skip_if_scored=skip_if_scored,
                 )
                 if score is not None:
                     self._write_score(conn, score, country_id)
@@ -122,7 +126,48 @@ class CriterionScorer:
         criterion_number: int,
         reference_year: int,
         information_environment: str,
+        skip_if_scored: bool = False,
     ) -> CriterionScore | None:
+        if skip_if_scored:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT criterion_number, criterion_name, dimension,
+                           legal_subscore, enforcement_subscore, criterion_score,
+                           confidence, evidence_count, information_opacity,
+                           rationale, evidence_gaps, key_sources,
+                           model_used, reference_year
+                    FROM criterion_scores
+                    WHERE country_id = %s AND criterion_number = %s
+                      AND reference_year = %s AND model_used = %s
+                    """,
+                    (country_id, criterion_number, reference_year, self._model_name),
+                )
+                row = cur.fetchone()
+            if row is not None:
+                logger.info(
+                    f"[CACHE HIT] Criterion {criterion_number} already scored "
+                    f"({row['criterion_score']:.2f}) — skipping LLM"
+                )
+                return CriterionScore(
+                    country_code=country_code,
+                    criterion_number=row["criterion_number"],
+                    criterion_name=row["criterion_name"],
+                    dimension=row["dimension"],
+                    legal_subscore=row["legal_subscore"],
+                    enforcement_subscore=row["enforcement_subscore"],
+                    criterion_score=row["criterion_score"],
+                    confidence=row["confidence"],
+                    evidence_count=row["evidence_count"],
+                    information_opacity=row["information_opacity"],
+                    rationale=row["rationale"],
+                    evidence_gaps=row["evidence_gaps"],
+                    key_sources=row["key_sources"] or [],
+                    model_used=row["model_used"],
+                    reference_year=row["reference_year"],
+                    created_at=datetime.now(),
+                )
+
         query_embedding = self._get_query_embedding(criterion_number)
         evidence = self._assemble_evidence(
             conn, country_id, criterion_number, query_embedding
