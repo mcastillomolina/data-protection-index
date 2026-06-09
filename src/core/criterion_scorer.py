@@ -149,6 +149,37 @@ class CriterionScorer:
             )
             return None
 
+        # Retry with a shorter context window when the LLM returns an empty response.
+        if not raw or "criterion_score" not in raw:
+            reduced = max(5, self._max_sections // 2)
+            logger.warning(
+                f"Criterion {criterion_number}: empty LLM response — "
+                f"retrying with max_sections={reduced} (was {self._max_sections})"
+            )
+            evidence = self._assemble_evidence(
+                conn, country_id, criterion_number, query_embedding,
+                max_sections=reduced,
+            )
+            user_prompt = self._build_user_prompt(
+                country_name=country_name,
+                criterion_number=criterion_number,
+                reference_year=reference_year,
+                information_environment=information_environment,
+                evidence=evidence,
+            )
+            try:
+                raw = self._llm.complete_json(
+                    prompt=user_prompt,
+                    system_prompt=CRITERION_SCORER_SYSTEM,
+                    temperature=0.2,
+                    max_tokens=1500,
+                )
+            except Exception as exc:
+                logger.error(
+                    f"LLM retry failed for criterion {criterion_number}: {exc}"
+                )
+                return None
+
         return self._parse_score(
             raw=raw,
             criterion_number=criterion_number,
@@ -179,6 +210,7 @@ class CriterionScorer:
         country_id: int,
         criterion_number: int,
         query_embedding: list[float],
+        max_sections: int | None = None,
     ) -> list[dict[str, Any]]:
         """
         Pull evidence from two sources:
@@ -217,7 +249,7 @@ class CriterionScorer:
                     vec,
                     self._cosine_threshold,
                     vec,
-                    self._max_sections,
+                    max_sections if max_sections is not None else self._max_sections,
                 ),
             )
             for row in cur.fetchall():
@@ -263,6 +295,30 @@ class CriterionScorer:
                         ),
                         "summary": row["summary"],
                         "reliability_score": row["reliability_score"],
+                    }
+                )
+
+            # --- Pull 3: external indicators ---
+            cur.execute(
+                """
+                SELECT source_name, indicator_name, indicator_value,
+                       indicator_normalised, source_year, notes
+                FROM external_indicators
+                WHERE country_id = %s AND pi_criterion_number = %s
+                ORDER BY source_year DESC NULLS LAST
+                """,
+                (country_id, criterion_number),
+            )
+            for row in cur.fetchall():
+                evidence.append(
+                    {
+                        "source_type": "external_indicator",
+                        "source_name": row["source_name"],
+                        "indicator_name": row["indicator_name"],
+                        "indicator_value": row["indicator_value"],
+                        "indicator_normalised": row["indicator_normalised"],
+                        "source_year": row["source_year"],
+                        "notes": row["notes"],
                     }
                 )
 
@@ -313,6 +369,17 @@ class CriterionScorer:
                     f"(similarity: {item['similarity']})"
                 )
                 body = item["text"][:2000]  # cap section length in prompt
+            elif item["source_type"] == "external_indicator":
+                header = (
+                    f"[{i}] external_indicator — {item.get('source_name', 'unknown')} "
+                    f"({item.get('indicator_name', '')}, year={item.get('source_year', '?')})"
+                )
+                body = (
+                    f"Raw value: {item.get('indicator_value')}  "
+                    f"Normalised (1–5): {item.get('indicator_normalised')}"
+                )
+                if item.get("notes"):
+                    body += f"\n{item['notes']}"
             else:
                 header = (
                     f"[{i}] enforcement_record — {item.get('enforcing_body', 'unknown')} "

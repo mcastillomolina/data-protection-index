@@ -309,6 +309,28 @@ CREATE TABLE IF NOT EXISTS country_index_scores (
 );
 """
 
+# ── E.1 ──────────────────────────────────────────────────────────────────────
+CREATE_EXTERNAL_INDICATORS = """
+CREATE TABLE IF NOT EXISTS external_indicators (
+    id                   SERIAL PRIMARY KEY,
+    country_id           INTEGER REFERENCES countries(id),
+    pi_criterion_number  INTEGER NOT NULL,
+    dimension            VARCHAR(20) NOT NULL,
+    source_name          VARCHAR(100) NOT NULL,
+    source_year          INTEGER,
+    indicator_name       VARCHAR(100),
+    indicator_value      FLOAT,
+    indicator_normalised FLOAT,
+    raw_data             JSONB,
+    notes                TEXT,
+    created_at           TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (country_id, pi_criterion_number, source_name, indicator_name, source_year)
+);
+
+CREATE INDEX IF NOT EXISTS idx_external_indicators_country_criterion
+  ON external_indicators(country_id, pi_criterion_number);
+"""
+
 ALL_STATEMENTS = [
     CREATE_CRITERIA,
     CREATE_COUNTRIES,
@@ -326,4 +348,5 @@ ALL_STATEMENTS = [
     SEED_TRUSTED_SOURCES,
     CREATE_CRITERION_SCORES,
     CREATE_COUNTRY_INDEX_SCORES,
+    CREATE_EXTERNAL_INDICATORS,
 ]
