@@ -1,5 +1,6 @@
 """Phase 3 — criterion-aware LLM extractor replacing InformationExtractor."""
 
+import asyncio
 import time
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,13 @@ from src.prompts.information_extraction import (
     EXTRACTION_SCHEMA as _GENERIC_SCHEMA,
     build_extraction_prompt as _build_generic_prompt,
 )
+
+# ---------------------------------------------------------------------------
+# Concurrency settings
+# ---------------------------------------------------------------------------
+
+MAX_CONCURRENT_EXTRACTIONS = 10  # semaphore limit; tune per rate-limit budget
+FORCE_SERIAL = False             # set True only to benchmark; remove before commit
 
 # ---------------------------------------------------------------------------
 # Document-dimension cache (loaded once from document_types.yaml)
@@ -285,7 +293,9 @@ class CriterionExtractor:
         dimension = _load_document_dimension(doc.document_type)
         criteria_ids = doc.criteria_ids or []
 
-        results: list[SectionExtractionResult] = []
+        # --- partition sections into pre-filtered and to-extract ---
+        pre_filtered: list[SectionExtractionResult] = []
+        to_extract: list[DocumentSection] = []
 
         for section in sections:
             if len(section.text) < self._min_section_chars:
@@ -297,7 +307,7 @@ class CriterionExtractor:
 
             if not self._pre_filter.passes(section.text):
                 logger.debug(f"Section {section.index}: pre-filter blocked (no signal terms)")
-                results.append(SectionExtractionResult(
+                pre_filtered.append(SectionExtractionResult(
                     section_index=section.index,
                     section_header=section.header,
                     section_text_original=section.text,
@@ -309,8 +319,67 @@ class CriterionExtractor:
                 ))
                 continue
 
-            result = self._extract_section(section, doc, dimension, criteria_ids)
-            results.append(result)
+            to_extract.append(section)
+
+        # --- run extraction: concurrent (default) or serial (benchmark mode) ---
+        if FORCE_SERIAL or not to_extract:
+            extracted: list[SectionExtractionResult] = [
+                self._extract_section(s, doc, dimension, criteria_ids)
+                for s in to_extract
+            ]
+        else:
+            logger.info(
+                f"[async] extracting {len(to_extract)} sections "
+                f"with concurrency={MAX_CONCURRENT_EXTRACTIONS}"
+            )
+
+            async def _run() -> list:
+                sem = asyncio.Semaphore(MAX_CONCURRENT_EXTRACTIONS)
+
+                async def _bounded(section: DocumentSection):
+                    async with sem:
+                        return await asyncio.to_thread(
+                            self._extract_section, section, doc, dimension, criteria_ids
+                        )
+
+                return await asyncio.gather(
+                    *[_bounded(s) for s in to_extract],
+                    return_exceptions=True,
+                )
+
+            raw = asyncio.run(_run())
+
+            extracted = []
+            for section, res in zip(to_extract, raw):
+                if isinstance(res, BaseException):
+                    logger.warning(
+                        f"Async extraction failed for section {section.index}: {res}"
+                    )
+                    extracted.append(SectionExtractionResult(
+                        section_index=section.index,
+                        section_header=section.header,
+                        section_text_original=section.text,
+                        split_tier_used=section.tier_used,
+                        extracted_fields=None,
+                        all_null=True,
+                        processing_time_seconds=0.0,
+                        error_message=str(res),
+                    ))
+                else:
+                    extracted.append(res)
+
+        # --- reconstruct results in original section order ---
+        _result_map: dict[int, SectionExtractionResult] = {}
+        for r in pre_filtered:
+            _result_map[r.section_index] = r
+        for r in extracted:
+            _result_map[r.section_index] = r
+
+        results = [
+            _result_map[s.index]
+            for s in sections
+            if s.index in _result_map
+        ]
 
         aggregated = self._aggregate(results)
         return results, aggregated
