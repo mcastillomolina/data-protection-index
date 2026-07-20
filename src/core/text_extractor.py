@@ -1,7 +1,9 @@
-"""Phase 2: Text extraction from PDF and HTML content."""
+"""Phase 2: Text extraction from PDF, HTML, and Word document content."""
 
 import io
 import re
+import subprocess
+import tempfile
 from typing import Optional
 
 import pdfplumber
@@ -10,7 +12,7 @@ from loguru import logger
 
 
 class TextExtractor:
-    """Extracts clean plain text from PDF bytes or HTML bytes."""
+    """Extracts clean plain text from PDF bytes, HTML bytes, or Word documents."""
 
     def __init__(self, min_text_length: int = 200):
         self.min_text_length = min_text_length
@@ -21,11 +23,15 @@ class TextExtractor:
         Extract text from raw bytes.
 
         Returns clean text, or None if extraction fails or the result is too short.
-        content_type must be 'pdf', 'html', or 'unknown'.
+        content_type must be 'pdf', 'html', 'doc', 'docx', or 'unknown'.
         """
         try:
             if content_type == "pdf":
                 text = self._extract_pdf(data)
+            elif content_type == "docx":
+                text = self._extract_docx(data)
+            elif content_type == "doc":
+                text = self._extract_doc(data)
             else:
                 text = self._extract_html(data)
         except Exception as e:
@@ -51,6 +57,40 @@ class TextExtractor:
 
         raw = "\n".join(pages)
         return self._clean(raw)
+
+    def _extract_docx(self, data: bytes) -> str:
+        import docx  # type: ignore[import]
+
+        doc = docx.Document(io.BytesIO(data))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return self._clean("\n".join(paragraphs))
+
+    def _extract_doc(self, data: bytes) -> str:
+        """Extract text from legacy .doc (OLE) using macOS textutil, falling back to docx."""
+        # Try macOS textutil first (handles OLE .doc natively)
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".doc", delete=False) as tmp:
+                tmp.write(data)
+                tmp_path = tmp.name
+            result = subprocess.run(
+                ["textutil", "-convert", "txt", "-stdout", tmp_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return self._clean(result.stdout)
+            logger.debug(f"textutil failed (rc={result.returncode}): {result.stderr.strip()}")
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            logger.debug(f"textutil not available: {e}")
+
+        # Fallback: try python-docx (works if the file is actually OOXML)
+        try:
+            return self._extract_docx(data)
+        except Exception as e:
+            logger.debug(f"python-docx fallback failed: {e}")
+
+        raise RuntimeError("Could not extract text from .doc file — no suitable parser available")
 
     def _extract_html(self, data: bytes) -> str:
         soup = BeautifulSoup(data, "lxml")

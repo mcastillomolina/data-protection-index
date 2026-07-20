@@ -36,10 +36,12 @@ class DocumentIdentifier:
         temperature: float = 0.3,
         max_tokens: int = 4000,
         cache_dir: Optional[Path] = None,
+        demo_mode: bool = False,
     ):
         self.llm_client = llm_client
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.demo_mode = demo_mode
         self._cache_dir: Optional[Path] = None
 
         if cache_dir is not None:
@@ -89,6 +91,13 @@ class DocumentIdentifier:
             known_documents=known_documents,
             document_types=document_types
         )
+
+        if self.demo_mode:
+            prompt += (
+                "\n\nReturn at most 3 documents. Only include documents with priority 9 or 10. "
+                "Focus on the primary data protection statute and constitution only. "
+                "Exclude sector-specific, secondary, and procedural laws."
+            )
 
         try:
             # Call LLM

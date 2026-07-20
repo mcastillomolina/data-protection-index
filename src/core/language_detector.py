@@ -9,9 +9,31 @@ class LanguageDetector:
     # Use only the first N chars — language is stable across a document
     _SAMPLE_CHARS = 2000
 
+    # Below this confidence, a mismatch triggers the country-language fallback
+    _FALLBACK_CONFIDENCE_THRESHOLD = 0.80
+
     def detect(self, text: str) -> str:
         """Return ISO 639-1 language code, or 'unknown' on failure."""
         lang, _ = self.detect_with_confidence(text)
+        return lang
+
+    def detect_with_fallback(
+        self,
+        text: str,
+        known_languages: list[str],
+    ) -> str:
+        """Detect language; fall back to known_languages[0] when confidence is low
+        and the detected language isn't among the country's known languages."""
+        lang, confidence = self.detect_with_confidence(text)
+        primary = known_languages[0] if known_languages else None
+
+        if primary and lang not in known_languages and confidence < self._FALLBACK_CONFIDENCE_THRESHOLD:
+            logger.warning(
+                f"Language override: detected '{lang}' (conf={confidence:.2f}) not in"
+                f" country languages {known_languages} — falling back to '{primary}'"
+            )
+            return primary
+
         return lang
 
     def detect_with_confidence(self, text: str) -> tuple[str, float]:

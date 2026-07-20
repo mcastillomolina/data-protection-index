@@ -88,10 +88,18 @@ class DocumentRetriever:
             return "pdf"
         if path.endswith((".html", ".htm")):
             return "html"
+        if path.endswith(".docx"):
+            return "docx"
+        if path.endswith(".doc"):
+            return "doc"
 
-        # PDF magic bytes
+        # Magic bytes
         if content[:4] == b"%PDF":
             return "pdf"
+        if content[:2] == b"PK":  # ZIP → likely DOCX
+            return "docx"
+        if content[:8] == bytes.fromhex("d0cf11e0a1b11ae1"):  # OLE → legacy DOC
+            return "doc"
 
         return "html"
 

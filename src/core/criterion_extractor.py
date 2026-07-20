@@ -266,11 +266,12 @@ class CriterionExtractor:
         llm_client: LLMClient,
         min_section_chars: int = 100,
         country_name: str = "",
+        disable_gate2: bool = False,
     ) -> None:
         self._llm = llm_client
         self._min_section_chars = min_section_chars
         self._country_name = country_name
-        self._pre_filter = SectionPreFilter()
+        self._pre_filter = SectionPreFilter(disable_gate2=disable_gate2)
         self._legal = LegalExtractor(llm_client)
         self._enforcement = EnforcementExtractor(llm_client)
 
