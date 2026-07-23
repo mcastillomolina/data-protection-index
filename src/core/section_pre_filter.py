@@ -87,6 +87,14 @@ TERMS_BOUNDARY: list[str] = [
     "слежка", "санкция", "штраф", "согласие",
     "субъект данных", "оператор", "хранение", "перехват",
     "биометрический", "судебный ордер", "нарушение данных",
+
+    # ── Vietnamese ────────────────────────────────────────────
+    "dữ liệu cá nhân", "bảo vệ dữ liệu", "quyền riêng tư",
+    "giám sát", "xử phạt", "phạt tiền", "đồng ý",
+    "chủ thể dữ liệu", "bên kiểm soát", "xử lý dữ liệu",
+    "lưu trữ dữ liệu", "chặn thu", "sinh trắc học",
+    "cơ quan giám sát", "vi phạm dữ liệu", "chuyển dữ liệu",
+    "mã hóa", "ẩn danh hóa", "an ninh mạng", "thông tin cá nhân",
 ]
 
 TERMS_SUBSTRING: list[str] = [
@@ -95,10 +103,32 @@ TERMS_SUBSTRING: list[str] = [
     "罚款", "同意", "数据主体", "数据控制者", "保留",
     "拦截", "生物特征", "司法令状", "数据泄露", "传输",
 
+    # ── Chinese (Traditional — Taiwan/HK) ─────────────────────
+    "個人資料", "資料保護", "隱私", "監控", "制裁",
+    "罰款", "同意", "資料主體", "資料控制者", "保存",
+    "攔截", "生物特徵", "司法令狀", "資料外洩", "傳輸",
+    "個人資料保護", "資訊安全", "監察",
+
     # ── Arabic ────────────────────────────────────────────────
     "البيانات الشخصية", "حماية البيانات", "الخصوصية",
     "المراقبة", "العقوبة", "الغرامة", "الموافقة",
     "سلطة الإشراف", "انتهاك البيانات",
+
+    # ── Thai ──────────────────────────────────────────────────
+    "ข้อมูลส่วนบุคคล", "การคุ้มครองข้อมูล", "ความเป็นส่วนตัว",
+    "การเฝ้าระวัง", "บทลงโทษ", "ค่าปรับ", "ความยินยอม",
+    "เจ้าของข้อมูล", "ผู้ควบคุมข้อมูล", "ผู้ประมวลผลข้อมูล",
+    "การเก็บรักษา", "การดักฟัง", "ข้อมูลชีวภาพ",
+    "หน่วยงานกำกับดูแล", "การละเมิดข้อมูล", "การโอนข้อมูล",
+    "การเข้ารหัส", "การทำให้ไม่ระบุตัวตน", "ความมั่นคงปลอดภัย",
+
+    # ── Korean ────────────────────────────────────────────────
+    "개인정보", "개인정보 보호", "사생활", "프라이버시",
+    "감시", "제재", "과태료", "벌금", "동의",
+    "정보주체", "개인정보처리자", "수탁자", "보유기간",
+    "감청", "생체인식", "법원 명령", "감독기관",
+    "개인정보 침해", "개인정보 이전", "암호화", "익명처리",
+    "개인정보보호위원회", "정보통신망",
 ]
 
 # "anonymi" / "pseudonymi" are English partial stems: match the prefix only
@@ -166,19 +196,24 @@ class SectionPreFilter:
     privacy/legal vocabulary. Uses word-boundary regex for Latin/Cyrillic
     languages and string containment for CJK/Arabic.
     Both gates must pass for a section to proceed to the LLM extractor.
+
+    Gate 2 can be disabled via disable_gate2=True for languages not yet
+    covered by the vocabulary list (e.g. during demos with unexpected countries).
     """
 
-    @staticmethod
-    def passes(text: str) -> bool:
+    def __init__(self, disable_gate2: bool = False) -> None:
+        self._disable_gate2 = disable_gate2
+
+    def passes(self, text: str) -> bool:
         """
         Returns True if the section should proceed to LLM extraction.
         Filter 1: not structural noise (regex + short-line ratio)
         Filter 2: contains at least one substantive privacy/legal signal term
-        Both gates must pass.
+        Both gates must pass (Gate 2 skipped if disable_gate2=True).
         """
         if is_structural_noise(text):
             return False
-        if not has_signal_terms(text):
+        if not self._disable_gate2 and not has_signal_terms(text):
             return False
         return True
 

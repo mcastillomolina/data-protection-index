@@ -49,6 +49,13 @@ from src.models.extraction import (
 from src.utils.config import Config
 from src.utils.logger import setup_logger
 
+DEMO_CRITERIA_NUMBERS = [1, 2, 3]
+DEMO_CRITERIA_NAMES = {
+    1: "Constitutional Protection",
+    2: "Statutory Protection",
+    3: "Privacy Enforcement",
+}
+
 
 def discover_documents_for_country(
     country_name: str,
@@ -58,7 +65,8 @@ def discover_documents_for_country(
     max_documents: Optional[int] = None,
     queries_per_document: int = 5,
     top_urls_per_document: int = 5,
-    verbose: bool = False
+    verbose: bool = False,
+    demo_mode: bool = False,
 ) -> DiscoveryOutput:
     """
     Main pipeline function for discovering documents for a country.
@@ -111,6 +119,7 @@ def discover_documents_for_country(
         temperature=config.llm.temperature,
         max_tokens=config.llm.max_tokens,
         cache_dir=_cache_dir,
+        demo_mode=demo_mode,
     )
 
     known_docs = country_metadata.get("known_documents", {})
@@ -154,7 +163,7 @@ def discover_documents_for_country(
     logger.info(f"\nStep 3/4: Executing web searches...")
     executor = SearchExecutor(
         search_client=search_client,
-        max_results_per_query=config.search.max_results_per_query,
+        max_results_per_query=2 if demo_mode else config.search.max_results_per_query,
         enable_deduplication=config.pipeline.enable_deduplication,
         show_progress=verbose
     )
@@ -172,47 +181,71 @@ def discover_documents_for_country(
     total_results = sum(len(results) for results in search_results.values())
     logger.info(f"✓ Collected {total_results} search results")
 
-    # Step 4: Filter by relevance
-    logger.info(f"\nStep 4/4: Filtering results by relevance (top {top_urls_per_document} per document)...")
-    relevance_filter = RelevanceFilter(
-        llm_client=llm_client,
-        temperature=0.2,  # Lower for consistent scoring
-        max_tokens=config.llm.max_tokens,
-        min_relevance_score=config.pipeline.min_relevance_score,
-        cache_dir=_cache_dir,
-    )
-
+    # Step 4: Filter by relevance (skipped in demo mode)
+    from src.models.document import ScoredResult as _ScoredResult
     document_results = []
-    for document in documents:
-        doc_id = document.official_name
-        results = search_results.get(doc_id, [])
 
-        if not results:
-            logger.warning(f"No search results for '{doc_id}'")
+    if demo_mode:
+        total_raw = sum(len(r) for r in search_results.values())
+        logger.info(f"Demo mode: relevance filter skipped ({total_raw} results → retrieval)")
+        for document in documents:
+            doc_id = document.official_name
+            results = search_results.get(doc_id, [])
+            scored = [
+                _ScoredResult(
+                    search_result=r,
+                    relevance_score=8.0,
+                    reasoning="Demo mode — filter skipped",
+                    is_likely_official=False,
+                    confidence="medium",
+                )
+                for r in results[:top_urls_per_document]
+            ]
             document_results.append(DocumentWithResults(
                 document=document,
-                top_results=[],
+                top_results=scored,
                 search_queries_used=all_queries.get(doc_id, [])
             ))
-            continue
-
-        logger.info(f"Scoring {len(results)} results for '{doc_id}'")
-
-        scored_results = relevance_filter.filter_results_batch(
-            document=document,
-            results=results,
-            country_name=country.name,
-            batch_size=10,
-            top_n=top_urls_per_document
+    else:
+        logger.info(f"\nStep 4/4: Filtering results by relevance (top {top_urls_per_document} per document)...")
+        relevance_filter = RelevanceFilter(
+            llm_client=llm_client,
+            temperature=0.2,
+            max_tokens=config.llm.max_tokens,
+            min_relevance_score=config.pipeline.min_relevance_score,
+            cache_dir=_cache_dir,
         )
 
-        document_results.append(DocumentWithResults(
-            document=document,
-            top_results=scored_results,
-            search_queries_used=all_queries.get(doc_id, [])
-        ))
+        for document in documents:
+            doc_id = document.official_name
+            results = search_results.get(doc_id, [])
 
-        logger.info(f"✓ Found {len(scored_results)} relevant results for '{doc_id}'")
+            if not results:
+                logger.warning(f"No search results for '{doc_id}'")
+                document_results.append(DocumentWithResults(
+                    document=document,
+                    top_results=[],
+                    search_queries_used=all_queries.get(doc_id, [])
+                ))
+                continue
+
+            logger.info(f"Scoring {len(results)} results for '{doc_id}'")
+
+            scored_results = relevance_filter.filter_results_batch(
+                document=document,
+                results=results,
+                country_name=country.name,
+                batch_size=10,
+                top_n=top_urls_per_document
+            )
+
+            document_results.append(DocumentWithResults(
+                document=document,
+                top_results=scored_results,
+                search_queries_used=all_queries.get(doc_id, [])
+            ))
+
+            logger.info(f"✓ Found {len(scored_results)} relevant results for '{doc_id}'")
 
     # Create output
     end_time = datetime.now()
@@ -532,6 +565,8 @@ def extract_information_from_retrieval(
     db_writer: Optional[DatabaseWriter],
     verbose: bool = False,
     cached_extractions: Optional[dict] = None,
+    demo_mode: bool = False,
+    disable_gate2: bool = False,
 ) -> ExtractionOutput:
     """
     Phase 3: Extract structured information from retrieved documents.
@@ -567,6 +602,7 @@ def extract_information_from_retrieval(
         llm_client=llm_client,
         min_section_chars=config.extraction.min_section_chars,
         country_name=country.name,
+        disable_gate2=disable_gate2,
     )
     country_id: Optional[int] = None
     if db_writer:
@@ -619,7 +655,7 @@ def extract_information_from_retrieval(
         logger.info(f"Processing '{doc.official_name}' ({len(text):,} chars)")
 
         # Step 1: Detect language
-        detected_lang = lang_detector.detect(text)
+        detected_lang = lang_detector.detect_with_fallback(text, country.official_languages)
         logger.info(f"  Language: {detected_lang}")
 
         # Step 2: Split into sections
@@ -627,7 +663,13 @@ def extract_information_from_retrieval(
         tier_used = sections[0].tier_used if sections else "tier3"
         logger.info(f"  Sections: {len(sections)} (tier={tier_used})")
 
+        if demo_mode and len(sections) > 20:
+            logger.info(f"Demo mode: capped at 20/{len(sections)} sections for '{doc.official_name}'")
+            sections = sections[:20]
+
         # Step 3 + 4: Extract and aggregate
+        _tok_before_p = llm_client.total_usage.prompt_tokens
+        _tok_before_c = llm_client.total_usage.completion_tokens
         try:
             section_results, aggregated = extractor.extract_document(retrieved_doc, sections)
         except Exception as exc:
@@ -704,14 +746,29 @@ def extract_information_from_retrieval(
             )
         )
 
+        _doc_prompt = llm_client.total_usage.prompt_tokens - _tok_before_p
+        _doc_completion = llm_client.total_usage.completion_tokens - _tok_before_c
         logger.info(
             f"  Done '{doc.official_name}': {sections_with_signal}/{len(sections)} "
-            f"sections with signal ({elapsed:.1f}s)"
+            f"sections with signal ({elapsed:.1f}s) | "
+            f"tokens in={_doc_prompt:,} out={_doc_completion:,} total={_doc_prompt + _doc_completion:,}"
         )
         successful += 1 if status != "failed" else 0
         failed += 1 if status == "failed" else 0
 
     processing_time = (datetime.now() - start_time).total_seconds()
+
+    _total = llm_client.total_usage
+    _avg = _total.total_tokens // max(sum(d.total_sections for d in doc_results), 1)
+    logger.info(
+        f"\n{'═' * 42}\n"
+        f"TOKEN USAGE SUMMARY — Phase 3 Extraction\n"
+        f"  Input tokens:  {_total.prompt_tokens:>12,}\n"
+        f"  Output tokens: {_total.completion_tokens:>12,}\n"
+        f"  Total tokens:  {_total.total_tokens:>12,}\n"
+        f"  Avg per section: {_avg:>10,}\n"
+        f"{'═' * 42}"
+    )
 
     logger.info("\n" + "=" * 60)
     logger.info("Extraction complete!")
@@ -1051,6 +1108,24 @@ Examples:
             "Equivalent to setting pipeline.enable_caching: false in config.yaml."
         ),
     )
+    parser.add_argument(
+        "--disable-gate2",
+        action="store_true",
+        help=(
+            "Disable the signal-vocabulary pre-filter (Gate 2) during Phase 3 extraction. "
+            "Use when running a country whose language is not yet in the vocabulary list — "
+            "all sections that pass Gate 1 (structural noise) will be sent to the LLM. "
+            "Safe in demo mode due to the 20-section cap."
+        ),
+    )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help=(
+            "Run the full pipeline end-to-end with reduced scope (3 docs, 3 criteria, "
+            "no relevance filter). Results are written to DB for Streamlit dashboard demos."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1072,6 +1147,17 @@ Examples:
 
         # Convenience variable used throughout main() for all cache-aware constructors
         cache_dir = Path(config.pipeline.cache_dir) if config.pipeline.enable_caching else None
+
+        if args.demo:
+            print(
+                "\n╔══════════════════════════════════════════════════╗\n"
+                "║            DPI PIPELINE — DEMO MODE              ║\n"
+                f"║  Country: {args.country:<39}║\n"
+                "║  Criteria: 3  |  Max docs: 3  |  Queries: 6     ║\n"
+                "║  Estimated time: ~3 minutes                      ║\n"
+                "╚══════════════════════════════════════════════════╝\n"
+            )
+        _demo_start = datetime.now()
 
         # Determine output directory
         output_dir = args.output_dir if args.output_dir else Path(config.output.directory)
@@ -1411,15 +1497,17 @@ Examples:
 
         else:
             # Phase 1: discovery
+            _p1_start = datetime.now()
             output = discover_documents_for_country(
                 country_name=args.country,
                 config=config,
                 db_writer=db_writer,
                 output_dir=output_dir,
-                max_documents=args.max_documents,
-                queries_per_document=args.queries_per_doc,
+                max_documents=3 if args.demo else args.max_documents,
+                queries_per_document=2 if args.demo else args.queries_per_doc,
                 top_urls_per_document=args.top_urls,
                 verbose=args.verbose,
+                demo_mode=args.demo,
             )
 
             if not args.no_save:
@@ -1428,10 +1516,21 @@ Examples:
 
             print_summary(output)
 
+            if args.demo:
+                _p1_elapsed = (datetime.now() - _p1_start).total_seconds()
+                total_searches = sum(
+                    len(d.search_queries_used) for d in output.documents
+                )
+                print(
+                    f"✅ P1 complete ({_p1_elapsed:.0f}s) — "
+                    f"{output.total_documents_identified} documents, {total_searches} searches"
+                )
+
             if args.discovery_only:
                 sys.exit(0)
 
             # Phase 2: retrieval
+            _p2_start = datetime.now()
             retrieval_output = retrieve_documents_from_output(
                 discovery_output=output,
                 config=config,
@@ -1444,6 +1543,13 @@ Examples:
                 print(f"\n✅ Retrieval results saved to: {retrieval_file}")
 
             print_retrieval_summary(retrieval_output)
+
+            if args.demo:
+                _p2_elapsed = (datetime.now() - _p2_start).total_seconds()
+                print(
+                    f"✅ P2 complete ({_p2_elapsed:.0f}s) — "
+                    f"{retrieval_output.successful_retrievals} documents retrieved"
+                )
 
         # Phase 3: extraction
         if not args.skip_extraction and not args.discovery_only:
@@ -1468,12 +1574,15 @@ Examples:
                     except Exception as _e:
                         logger.warning(f"Could not load extraction cache: {_e}")
 
+            _p3_start = datetime.now()
             extraction_output = extract_information_from_retrieval(
                 retrieval_output=retrieval_output,
                 config=config,
                 db_writer=db_writer,
                 verbose=args.verbose,
                 cached_extractions=cached_extractions,
+                demo_mode=args.demo,
+                disable_gate2=args.disable_gate2,
             )
 
             if not args.no_save:
@@ -1481,6 +1590,11 @@ Examples:
                 print(f"\n✅ Extraction results saved to: {extraction_file}")
 
             print_extraction_summary(extraction_output)
+
+            if args.demo:
+                _p3_elapsed = (datetime.now() - _p3_start).total_seconds()
+                total_sections = sum(d.total_sections for d in extraction_output.documents)
+                print(f"✅ P3 complete ({_p3_elapsed:.0f}s) — {total_sections} sections extracted")
 
             # Optional: embed non-null sections after Phase 3
             if args.populate_embeddings and db_writer and dsn:
@@ -1499,6 +1613,91 @@ Examples:
                         f"Could not find country_id for '{args.country}' — "
                         "skipping embedding population"
                     )
+
+            # --demo: run embeddings → external sources → scoring end-to-end
+            if args.demo and db_writer and dsn:
+                reference_year = args.year or datetime.now().year
+
+                # Embeddings
+                _emb_start = datetime.now()
+                _emb_country_id = db_writer.get_country_id_by_name(args.country)
+                if _emb_country_id is not None:
+                    _emb_client = config.get_embedding_client()
+                    from src.core.embedding_populator import EmbeddingPopulator as _EP
+                    _populator = _EP(dsn=dsn, embedding_client=_emb_client)
+                    _n_embedded = _populator.populate(_emb_country_id)
+                    print(
+                        f"✅ Embeddings complete ({(datetime.now() - _emb_start).total_seconds():.0f}s)"
+                        f" — {_n_embedded} section(s) embedded"
+                    )
+                else:
+                    logger.warning("Demo: could not find country_id for embeddings — skipping")
+
+                # External sources (failures are expected and acceptable)
+                _ext_start = datetime.now()
+                try:
+                    _ext_country_id, _ext_country_name, _ext_iso, _ = (
+                        _get_country_info_for_scoring(db_writer, dsn, args.country)
+                    )
+                    from src.core.external_source_fetcher import ExternalSourceFetcher as _ESF
+                    _fetcher = _ESF(dsn=dsn)
+                    _ext_results = _fetcher.fetch_all(
+                        country_iso=_ext_iso,
+                        country_id=_ext_country_id,
+                        year=reference_year,
+                        country_name=_ext_country_name,
+                    )
+                    _ext_rows = sum(_ext_results.values())
+                except Exception as _ext_err:
+                    logger.warning(f"Demo: external sources error (non-fatal): {_ext_err}")
+                    _ext_country_id, _ext_country_name, _ext_iso = None, args.country, ""
+                    _ext_rows = 0
+                print(
+                    f"✅ External sources complete ({(datetime.now() - _ext_start).total_seconds():.0f}s)"
+                    f" — {_ext_rows} row(s) written"
+                )
+
+                # Scoring — DEMO_CRITERIA_NUMBERS only
+                _score_start = datetime.now()
+                if _ext_country_id is not None:
+                    from src.core.criterion_scorer import CriterionScorer as _DemoCS
+                    _demo_scorer = _DemoCS(
+                        llm_client=config.get_llm_client(),
+                        embedding_client=config.get_embedding_client(),
+                        dsn=dsn,
+                        model_name=config.llm.model,
+                        cosine_threshold=config.scoring.cosine_similarity_threshold,
+                        max_sections=config.scoring.max_sections_per_criterion,
+                    )
+                    _demo_scores = _demo_scorer.score_all_criteria(
+                        country_id=_ext_country_id,
+                        country_name=_ext_country_name,
+                        country_code=_ext_iso,
+                        reference_year=reference_year,
+                        criteria_filter=DEMO_CRITERIA_NUMBERS,
+                    )
+                    print(
+                        f"✅ Scoring complete ({(datetime.now() - _score_start).total_seconds():.0f}s)"
+                        f" — 3 criteria scored"
+                    )
+
+                    # Final summary
+                    _total_elapsed = (datetime.now() - _demo_start).total_seconds()
+                    _mins, _secs = divmod(int(_total_elapsed), 60)
+                    print("\n" + "=" * 40)
+                    print(f"🏁 Demo complete in {_mins}m {_secs}s — {args.country}")
+                    print()
+                    print(f"{'Criterion':<40} {'Score':>5}")
+                    print("─" * 46)
+                    _score_map = {s.criterion_number: s for s in _demo_scores}
+                    for _num in DEMO_CRITERIA_NUMBERS:
+                        _s = _score_map.get(_num)
+                        _name = DEMO_CRITERIA_NAMES.get(_num, f"Criterion {_num}")
+                        _val = f"{_s.criterion_score:.2f}" if _s else "N/A"
+                        print(f"{_name:<40} {_val:>5}")
+                    print("=" * 40 + "\n")
+                else:
+                    logger.warning("Demo: scoring skipped — country not found in DB after P1-P3")
 
         if db_writer:
             db_writer.close()

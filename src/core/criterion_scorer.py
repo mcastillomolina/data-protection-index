@@ -65,6 +65,7 @@ class CriterionScorer:
         reference_year: int,
         information_environment: str = "open",
         skip_if_scored: bool = False,
+        criteria_filter: list[int] | None = None,
     ) -> list[CriterionScore]:
         """
         Score all 14 criteria for a country.
@@ -75,9 +76,10 @@ class CriterionScorer:
         from the DB without calling the LLM.
         """
         scores: list[CriterionScore] = []
+        criteria_to_score = criteria_filter if criteria_filter else range(1, 15)
         conn = psycopg2.connect(self._dsn)
         try:
-            for criterion_number in range(1, 15):
+            for criterion_number in criteria_to_score:
                 logger.info(
                     f"Scoring criterion {criterion_number}/14 "
                     f"({CRITERIA[criterion_number]['name']}) for {country_name}"
