@@ -262,6 +262,7 @@ CREATE TABLE IF NOT EXISTS criterion_scores (
     confidence           VARCHAR(10),
     evidence_count       INTEGER,
     information_opacity  BOOLEAN DEFAULT FALSE,
+    retrieval_limited    BOOLEAN DEFAULT FALSE,
 
     rationale            TEXT,
     evidence_gaps        TEXT,
@@ -281,6 +282,16 @@ CREATE INDEX IF NOT EXISTS idx_criterion_scores_criterion
   ON criterion_scores(criterion_number);
 """
 
+# Additive migration for pre-existing criterion_scores tables.
+# retrieval_limited: the document-retrieval instrument found zero usable evidence
+# (no embedded, non-null sections) for this country-criterion. A property of the
+# pipeline, NOT of the country. Distinct from information_opacity (which stays
+# unpopulated — attributing opacity to a country requires positive evidence).
+ALTER_CRITERION_SCORES_RETRIEVAL_LIMITED = """
+ALTER TABLE criterion_scores
+  ADD COLUMN IF NOT EXISTS retrieval_limited BOOLEAN DEFAULT FALSE;
+"""
+
 # ── G.1 ──────────────────────────────────────────────────────────────────────
 CREATE_COUNTRY_INDEX_SCORES = """
 CREATE TABLE IF NOT EXISTS country_index_scores (
@@ -298,6 +309,7 @@ CREATE TABLE IF NOT EXISTS country_index_scores (
     criteria_count       INTEGER,
     missing_criteria     JSONB,
     opacity_affected     INTEGER,
+    partial_coverage     BOOLEAN DEFAULT FALSE,
 
     model_used           VARCHAR(100),
     confidence_weighting BOOLEAN DEFAULT TRUE,
@@ -307,6 +319,12 @@ CREATE TABLE IF NOT EXISTS country_index_scores (
 
     UNIQUE (country_id, reference_year, model_used)
 );
+"""
+
+# Additive migration for pre-existing country_index_scores tables.
+ALTER_COUNTRY_INDEX_SCORES_PARTIAL = """
+ALTER TABLE country_index_scores
+  ADD COLUMN IF NOT EXISTS partial_coverage BOOLEAN DEFAULT FALSE;
 """
 
 # ── E.1 ──────────────────────────────────────────────────────────────────────
@@ -347,6 +365,8 @@ ALL_STATEMENTS = [
     CREATE_TRUSTED_SOURCES,
     SEED_TRUSTED_SOURCES,
     CREATE_CRITERION_SCORES,
+    ALTER_CRITERION_SCORES_RETRIEVAL_LIMITED,
     CREATE_COUNTRY_INDEX_SCORES,
+    ALTER_COUNTRY_INDEX_SCORES_PARTIAL,
     CREATE_EXTERNAL_INDICATORS,
 ]

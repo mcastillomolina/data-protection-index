@@ -16,7 +16,6 @@ from src.prompts.criterion_scoring import (
     CRITERION_SCORER_SYSTEM,
     CRITERION_SCORER_USER,
     MIXED_INSTRUCTIONS,
-    OPACITY_BLOCK,
 )
 
 _MIXED_CRITERIA = {4, 5, 7, 9, 14}
@@ -63,7 +62,6 @@ class CriterionScorer:
         country_name: str,
         country_code: str,
         reference_year: int,
-        information_environment: str = "open",
         skip_if_scored: bool = False,
         criteria_filter: list[int] | None = None,
     ) -> list[CriterionScore]:
@@ -91,7 +89,6 @@ class CriterionScorer:
                     country_code=country_code,
                     criterion_number=criterion_number,
                     reference_year=reference_year,
-                    information_environment=information_environment,
                     skip_if_scored=skip_if_scored,
                 )
                 if score is not None:
@@ -127,7 +124,6 @@ class CriterionScorer:
         country_code: str,
         criterion_number: int,
         reference_year: int,
-        information_environment: str,
         skip_if_scored: bool = False,
     ) -> CriterionScore | None:
         if skip_if_scored:
@@ -179,7 +175,6 @@ class CriterionScorer:
             country_name=country_name,
             criterion_number=criterion_number,
             reference_year=reference_year,
-            information_environment=information_environment,
             evidence=evidence,
         )
 
@@ -211,7 +206,6 @@ class CriterionScorer:
                 country_name=country_name,
                 criterion_number=criterion_number,
                 reference_year=reference_year,
-                information_environment=information_environment,
                 evidence=evidence,
             )
             try:
@@ -383,12 +377,10 @@ class CriterionScorer:
         country_name: str,
         criterion_number: int,
         reference_year: int,
-        information_environment: str,
         evidence: list[dict[str, Any]],
     ) -> str:
         criterion_info = CRITERIA[criterion_number]
         is_mixed = criterion_number in _MIXED_CRITERIA
-        is_opacity = information_environment == "restricted"
 
         return CRITERION_SCORER_USER.format(
             country_name=country_name,
@@ -396,10 +388,8 @@ class CriterionScorer:
             criterion_name=criterion_info["name"],
             dimension=criterion_info["dimension"],
             reference_year=reference_year,
-            information_environment=information_environment,
             evidence_count=len(evidence),
             formatted_evidence=self._format_evidence(evidence),
-            opacity_block=OPACITY_BLOCK if is_opacity else "",
             criterion_rubric=CRITERION_RUBRICS[criterion_number],
             mixed_instructions=MIXED_INSTRUCTIONS if is_mixed else "",
         )
@@ -488,7 +478,11 @@ class CriterionScorer:
                 criterion_score=criterion_score,
                 confidence=raw.get("confidence", "low"),
                 evidence_count=evidence_count,
-                information_opacity=bool(raw.get("information_opacity", False)),
+                # Never read this from the LLM response — the model was self-reporting
+                # it from pretrained country-level priors, not evidence (see prompt
+                # NOTE in criterion_scoring.py). information_opacity stays False here
+                # regardless of what the raw JSON contains.
+                information_opacity=False,
                 rationale=raw.get("rationale", ""),
                 evidence_gaps=raw.get("evidence_gaps", ""),
                 key_sources=raw.get("key_sources", []),

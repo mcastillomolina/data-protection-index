@@ -47,6 +47,7 @@ class IndexAggregator:
         self._enforce_weight    = scoring_config.enforcement_weight
         self._missing_strategy  = scoring_config.missing_strategy
         self._conf_weighting    = scoring_config.confidence_weighting
+        self._min_criteria      = getattr(scoring_config, "min_criteria_for_ranking", 12)
 
     # ------------------------------------------------------------------
     # Public API
@@ -103,6 +104,8 @@ class IndexAggregator:
             s["criterion_number"] for s in scores if s.get("information_opacity")
         ]
 
+        criteria_count = len({s["criterion_number"] for s in scores})
+
         result = CountryIndexScore(
             country_id=country_id,
             reference_year=reference_year,
@@ -110,9 +113,10 @@ class IndexAggregator:
             enforcement_score=round(enforcement_mean, 4) if enforcement_mean is not None else None,
             final_score=round(final_score, 4),
             pi_category=self._map_category(final_score),
-            criteria_count=len({s["criterion_number"] for s in scores}),
+            criteria_count=criteria_count,
             missing_criteria=missing,
             opacity_affected_criteria=opacity_criteria,
+            partial_coverage=criteria_count < self._min_criteria,
             model_used=model_used or "default",
             confidence_weighting=self._conf_weighting,
             missing_strategy=self._missing_strategy,
@@ -125,13 +129,33 @@ class IndexAggregator:
         reference_year: int,
         model_used: str | None = None,
     ) -> list[CountryIndexScore]:
-        """Assign ranks by final_score DESC and write back to DB."""
-        rows = self._fetch_all_index_scores(reference_year, model_used)
+        """Assign ranks by final_score DESC and write back to DB.
+
+        Only countries with partial_coverage=false are ranked. Partial-coverage
+        countries are computed and persisted but kept out of the ranking; their
+        rank is reset to NULL so a stale rank from an earlier run never leaks
+        into the export.
+        """
+        rows = [
+            r for r in self._fetch_all_index_scores(reference_year, model_used)
+            if not r.partial_coverage
+        ]
         rows.sort(key=lambda r: r.final_score, reverse=True)
 
         conn = psycopg2.connect(self._dsn)
         try:
             with conn.cursor() as cur:
+                # Clear ranks on partial-coverage rows for this year/model.
+                cur.execute(
+                    """
+                    UPDATE country_index_scores
+                    SET rank = NULL
+                    WHERE reference_year = %s
+                      AND COALESCE(model_used, 'default') = COALESCE(%s, 'default')
+                      AND partial_coverage = true
+                    """,
+                    (reference_year, model_used or "default"),
+                )
                 for rank, row in enumerate(rows, 1):
                     row.rank = rank
                     cur.execute(
@@ -276,7 +300,7 @@ class IndexAggregator:
                         SELECT country_id, reference_year, legal_score, enforcement_score,
                                final_score, pi_category, rank, criteria_count,
                                missing_criteria, opacity_affected, model_used,
-                               confidence_weighting, missing_strategy
+                               confidence_weighting, missing_strategy, partial_coverage
                         FROM country_index_scores
                         WHERE reference_year = %s AND model_used = %s
                         """,
@@ -288,7 +312,7 @@ class IndexAggregator:
                         SELECT country_id, reference_year, legal_score, enforcement_score,
                                final_score, pi_category, rank, criteria_count,
                                missing_criteria, opacity_affected, model_used,
-                               confidence_weighting, missing_strategy
+                               confidence_weighting, missing_strategy, partial_coverage
                         FROM country_index_scores
                         WHERE reference_year = %s
                         """,
@@ -314,6 +338,7 @@ class IndexAggregator:
                 model_used=r["model_used"],
                 confidence_weighting=bool(r["confidence_weighting"]),
                 missing_strategy=r["missing_strategy"] or "exclude",
+                partial_coverage=bool(r["partial_coverage"]),
             ))
         return results
 
@@ -333,6 +358,7 @@ class IndexAggregator:
                         FROM country_index_scores cis
                         JOIN countries c ON c.id = cis.country_id
                         WHERE cis.reference_year = %s AND cis.model_used = %s
+                          AND cis.partial_coverage = false
                         ORDER BY cis.rank NULLS LAST
                         """,
                         (reference_year, model_used),
@@ -347,6 +373,7 @@ class IndexAggregator:
                         FROM country_index_scores cis
                         JOIN countries c ON c.id = cis.country_id
                         WHERE cis.reference_year = %s
+                          AND cis.partial_coverage = false
                         ORDER BY cis.rank NULLS LAST
                         """,
                         (reference_year,),
@@ -371,8 +398,9 @@ class IndexAggregator:
                         country_id, reference_year,
                         legal_score, enforcement_score, final_score,
                         pi_category, criteria_count, missing_criteria, opacity_affected,
+                        partial_coverage,
                         model_used, confidence_weighting, missing_strategy
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (country_id, reference_year, model_used)
                     DO UPDATE SET
                         legal_score          = EXCLUDED.legal_score,
@@ -382,6 +410,7 @@ class IndexAggregator:
                         criteria_count       = EXCLUDED.criteria_count,
                         missing_criteria     = EXCLUDED.missing_criteria,
                         opacity_affected     = EXCLUDED.opacity_affected,
+                        partial_coverage     = EXCLUDED.partial_coverage,
                         confidence_weighting = EXCLUDED.confidence_weighting,
                         missing_strategy     = EXCLUDED.missing_strategy,
                         created_at           = NOW()
@@ -396,6 +425,7 @@ class IndexAggregator:
                         score.criteria_count,
                         json.dumps(score.missing_criteria),
                         opacity_count,
+                        score.partial_coverage,
                         model_used,
                         score.confidence_weighting,
                         score.missing_strategy,

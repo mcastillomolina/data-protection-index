@@ -99,10 +99,12 @@ class ScoringConfig:
     embedding_provider: str
     embedding_dims: int = 768
     ollama_base_url: str = "http://localhost:11434"
+    ollama_timeout: int = 60
     legal_weight: float = 0.40
     enforcement_weight: float = 0.60
     missing_strategy: str = "exclude"
     confidence_weighting: bool = True
+    min_criteria_for_ranking: int = 12
     benchmark_models: List = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
@@ -347,6 +349,7 @@ class Config:
             return OllamaEmbeddingClient(
                 model=self.scoring.embedding_model,
                 base_url=self.scoring.ollama_base_url,
+                timeout=self.scoring.ollama_timeout,
             )
         else:
             raise ValueError(f"Unknown embedding provider: {provider}")

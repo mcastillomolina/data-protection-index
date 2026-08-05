@@ -39,26 +39,70 @@ class DatabaseWriter:
     # Schema
     # ------------------------------------------------------------------
 
+    # Fixed key for the session-level advisory lock that serialises schema setup.
+    # The idempotent DDL (CREATE/ALTER/CREATE INDEX) takes AccessExclusiveLocks;
+    # two processes running ensure_schema() concurrently deadlock without this.
+    _SCHEMA_LOCK_KEY = 823476101
+
     def ensure_schema(self) -> None:
-        """Run all CREATE TABLE IF NOT EXISTS statements."""
+        """Run all CREATE TABLE IF NOT EXISTS statements.
+
+        Serialised across processes via a Postgres advisory lock so parallel
+        pipeline runs queue for the DDL instead of deadlocking on table locks.
+        The lock is session-level; it auto-releases if the connection drops.
+        """
         conn = self._get_conn()
+
+        # Fast path: if the schema is already fully migrated, skip the DDL
+        # entirely. ALTER TABLE ... IF NOT EXISTS is a no-op when the column
+        # already exists, but it still takes an AccessExclusiveLock to check —
+        # which can deadlock against unrelated long-running DML from other
+        # concurrent processes (e.g. a batch embedding UPDATE on a child table
+        # via FK to `documents`), not just against another ensure_schema() call.
+        # Checking these two columns (the last two ALTERs applied, in order) is
+        # enough: statements run sequentially, so if the last one landed, every
+        # earlier one already did too.
         with conn.cursor() as cur:
-            # pgvector extension must exist before vector columns can be created.
-            # Run it first so a missing extension surfaces with actionable instructions.
-            try:
-                cur.execute(CREATE_VECTOR_EXTENSION)
-                conn.commit()
-            except psycopg2.Error as e:
-                conn.rollback()
-                raise RuntimeError(
-                    "pgvector extension is not installed in this PostgreSQL instance.\n"
-                    "Fix: change the Docker image in docker-compose.yml from\n"
-                    "  'postgres:16-alpine'  →  'pgvector/pgvector:pg16'\n"
-                    "then run:  docker compose up -d --force-recreate"
-                ) from e
-            for stmt in ALL_STATEMENTS:
-                cur.execute(stmt)
-        conn.commit()
+            cur.execute(
+                """
+                SELECT
+                    EXISTS (SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'criterion_scores'
+                              AND column_name = 'retrieval_limited') AS a,
+                    EXISTS (SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'country_index_scores'
+                              AND column_name = 'partial_coverage') AS b
+                """
+            )
+            already_migrated = all(cur.fetchone())
+        if already_migrated:
+            logger.debug("Database schema already up to date — skipping DDL")
+            return
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(%s)", (self._SCHEMA_LOCK_KEY,))
+        try:
+            with conn.cursor() as cur:
+                # pgvector extension must exist before vector columns can be created.
+                # Run it first so a missing extension surfaces with actionable instructions.
+                try:
+                    cur.execute(CREATE_VECTOR_EXTENSION)
+                    conn.commit()
+                except psycopg2.Error as e:
+                    conn.rollback()
+                    raise RuntimeError(
+                        "pgvector extension is not installed in this PostgreSQL instance.\n"
+                        "Fix: change the Docker image in docker-compose.yml from\n"
+                        "  'postgres:16-alpine'  →  'pgvector/pgvector:pg16'\n"
+                        "then run:  docker compose up -d --force-recreate"
+                    ) from e
+                for stmt in ALL_STATEMENTS:
+                    cur.execute(stmt)
+            conn.commit()
+        finally:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (self._SCHEMA_LOCK_KEY,))
+            conn.commit()
         logger.debug("Database schema ensured")
 
     # ------------------------------------------------------------------
@@ -271,6 +315,11 @@ class DatabaseWriter:
         constitutional_privacy_right = aggregated.get("constitutional_privacy_right")
         dpa_exists = aggregated.get("dpa_exists")
         dpa_independence = aggregated.get("dpa_independence")
+        # Problem 2C fix: the column existed but was never written. Wire the mapping
+        # so a legitimate flag from the extractor persists. Expected null/false today
+        # (the extractor rarely emits it — see diagnosis Problem 2B, intentionally
+        # left untouched), which is the honest state.
+        information_opacity_flag = aggregated.get("information_opacity_flag")
         extraction_dimension = metadata.get("extraction_dimension")
         with conn.cursor() as cur:
             cur.execute(
@@ -280,8 +329,8 @@ class DatabaseWriter:
                      total_sections, sections_with_signal, split_tier_used,
                      detected_language, status, extracted_at, error_message,
                      extraction_dimension, constitutional_privacy_right,
-                     dpa_exists, dpa_independence)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, %s)
+                     dpa_exists, dpa_independence, information_opacity_flag)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (document_id) DO UPDATE
                     SET extracted_fields             = EXCLUDED.extracted_fields,
                         enforcement_authority        = EXCLUDED.enforcement_authority,
@@ -295,7 +344,8 @@ class DatabaseWriter:
                         extraction_dimension         = EXCLUDED.extraction_dimension,
                         constitutional_privacy_right = EXCLUDED.constitutional_privacy_right,
                         dpa_exists                   = EXCLUDED.dpa_exists,
-                        dpa_independence             = EXCLUDED.dpa_independence
+                        dpa_independence             = EXCLUDED.dpa_independence,
+                        information_opacity_flag     = EXCLUDED.information_opacity_flag
                 RETURNING id
                 """,
                 (
@@ -312,6 +362,7 @@ class DatabaseWriter:
                     constitutional_privacy_right,
                     dpa_exists,
                     dpa_independence,
+                    information_opacity_flag,
                 ),
             )
             row = cur.fetchone()

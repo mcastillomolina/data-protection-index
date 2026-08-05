@@ -9,26 +9,34 @@ Scoring principles:
 - A country with strong laws but weak enforcement scores low on
   enforcement sub-dimensions — do not let legal strength compensate
 - Absence of evidence for enforcement criteria is itself a negative
-  signal, especially when the information environment is open
-- Absence of evidence in a restricted information environment warrants
-  low confidence, not a low score — score conservatively and flag it
+  signal — do not assume evidence exists but was simply not surfaced
 - Be consistent: the same evidence quality should produce the same score
   regardless of country wealth or region
 
 Return valid JSON only.
 """
 
+# NOTE: information_environment / opacity handling was removed from the scorer prompt
+# (both the {information_environment}/{opacity_block} placeholders and, as of this
+# revision, the "restricted information environment" language in the system prompt and
+# the "information_opacity" field in the expected JSON below). Confirmed live: with the
+# country-level opacity_block gone, the model was still self-reporting
+# information_opacity=true from its own pretrained country-level priors — flat across
+# legal/enforcement/mixed dimensions and uncorrelated with evidence_count for the same
+# call (e.g. China: 14/14 criteria marked opaque including ones with evidence_count=20,
+# the max). That is exactly the a priori geopolitical assumption Decision B removed from
+# document_identification.py, leaking back through this channel. information_opacity
+# stays in the DB schema as an intentional, unpopulated column for future positive
+# evidence — see diagnosis Decision A — but the model is no longer asked to guess it.
+
 CRITERION_SCORER_USER = """
 Country: {country_name}
 Criterion {criterion_number}: {criterion_name}
 Dimension: {dimension}
 Reference year: {reference_year}
-Information environment: {information_environment}
 
 EVIDENCE ({evidence_count} sources):
 {formatted_evidence}
-
-{opacity_block}
 
 SCORING RUBRIC:
 {criterion_rubric}
@@ -43,16 +51,8 @@ Return:
   "confidence": "high" | "medium" | "low",
   "rationale": "<2-3 sentences citing specific evidence>",
   "evidence_gaps": "<what was missing or unverifiable>",
-  "key_sources": ["<domain or source name>"],
-  "information_opacity": <bool>
+  "key_sources": ["<domain or source name>"]
 }}
-"""
-
-OPACITY_BLOCK = """
-NOTE — RESTRICTED INFORMATION ENVIRONMENT:
-Evidence for this country is limited due to restrictions on information
-access. Score conservatively. Low confidence is appropriate. The opacity
-itself is a negative signal for enforcement-dimension criteria.
 """
 
 MIXED_INSTRUCTIONS = """
