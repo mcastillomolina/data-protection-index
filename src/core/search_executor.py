@@ -4,6 +4,7 @@ Search executor for executing web searches.
 This module executes search queries using a SearchClient and aggregates results.
 """
 
+import re
 from typing import List, Dict
 from loguru import logger
 from tqdm import tqdm
@@ -159,11 +160,19 @@ class SearchExecutor:
         """
         search_parts = [query.query_string]
 
-        # Add site restrictions
+        # Add site restrictions, skipping domains already present in the
+        # base query string (the query generator sometimes embeds `site:`
+        # inline AND lists the same domain in site_restrictions, which would
+        # otherwise duplicate the operator, e.g. "site:gov.cn site:gov.cn").
+        existing_sites = {
+            domain.lower() for domain in re.findall(r"site:(\S+)", query.query_string, re.IGNORECASE)
+        }
         for site in query.site_restrictions:
-            if not site.startswith("site:"):
-                site = f"site:{site}"
-            search_parts.append(site)
+            domain = site[len("site:"):] if site.startswith("site:") else site
+            if domain.lower() in existing_sites:
+                continue
+            existing_sites.add(domain.lower())
+            search_parts.append(f"site:{domain}")
 
         # Add file type hint if not already present in the query string
         if query.file_type_hint:

@@ -223,7 +223,23 @@ class SearchClient:
 
         # Execute search
         search = GoogleSearch(params)
+        # The google-search-results library defaults SerpApiClient.timeout to 60000
+        # and passes it straight to requests.get(timeout=...), which treats it as
+        # SECONDS — a ~16.7 hour effective timeout. Our configured self.timeout was
+        # never reaching the actual HTTP call because GoogleSearch's constructor
+        # doesn't accept it; override the attribute directly after construction.
+        # Confirmed live: a single search hung 16m15s waiting on this default.
+        search.timeout = self.timeout
         data = search.get_dict()
+
+        # SerpAPI can return HTTP 200 with a soft error (e.g. an invalid or
+        # blocked `gl` value) instead of raising. Surface it as an exception
+        # so the retry logic sees it, instead of silently caching it as
+        # zero organic results indistinguishable from a genuine empty search.
+        api_error = data.get("error")
+        status = data.get("search_metadata", {}).get("status")
+        if api_error or status == "Error":
+            raise RuntimeError(f"SerpAPI returned an error (status={status}): {api_error}")
 
         # Extract and normalize results
         results = []

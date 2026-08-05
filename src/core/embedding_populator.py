@@ -8,6 +8,14 @@ from loguru import logger
 
 from src.clients.embedding_client import EmbeddingClient
 
+# nomic-embed-text's context window is ~2048 tokens. CJK text tokenizes far more
+# densely than Latin-script text (2000 chars of Chinese can exceed the window while
+# 2000 chars of English/Spanish sits comfortably under it), so a single oversized
+# section in a batch fails the whole Ollama /api/embed request with "the input
+# length exceeds the context length" — confirmed live against China/Taiwan section
+# text. 1200 chars leaves margin under the empirically-confirmed 1500-char safe point.
+_MAX_EMBED_CHARS = 1200
+
 
 class EmbeddingPopulator:
     """
@@ -52,7 +60,7 @@ class EmbeddingPopulator:
             for batch_start in range(0, len(rows), self.batch_size):
                 batch = rows[batch_start : batch_start + self.batch_size]
                 ids = [r[0] for r in batch]
-                texts = [r[1] for r in batch]
+                texts = [r[1][:_MAX_EMBED_CHARS] for r in batch]
 
                 vectors = self.embedding_client.embed(texts)
 

@@ -68,6 +68,7 @@ class CountryIndexScore(BaseModel):
     criteria_count: int
     missing_criteria: List[int] = Field(default_factory=list)
     opacity_affected_criteria: List[int] = Field(default_factory=list)
+    partial_coverage: bool = False
 
     model_used: Optional[str] = None
     confidence_weighting: bool = True

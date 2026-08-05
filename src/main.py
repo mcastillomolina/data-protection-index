@@ -171,6 +171,14 @@ def discover_documents_for_country(
     # Get country code for localized search
     country_code = country.iso_code.lower() if country.iso_code else None
     language = country.official_languages[0] if country.official_languages else None
+    # Google/SerpAPI's `hl` (interface language) rejects the bare ISO 639-1 "zh" —
+    # it requires a region variant. Confirmed live: SerpAPI error "Unsupported `zh`
+    # interface language - hl parameter" for both China and Taiwan, which is what
+    # was silently swallowed as zero-result queries before the search_client.py
+    # error-check fix. Map by country, since "zh" alone is ambiguous between them.
+    _ZH_HL_BY_COUNTRY = {"cn": "zh-CN", "tw": "zh-TW", "hk": "zh-TW", "sg": "zh-CN"}
+    if language == "zh" and country_code in _ZH_HL_BY_COUNTRY:
+        language = _ZH_HL_BY_COUNTRY[country_code]
 
     search_results = executor.execute_searches_by_document(
         queries_by_doc=all_queries,
@@ -1101,6 +1109,17 @@ Examples:
         help="Export format for --export-index (default: csv).",
     )
     parser.add_argument(
+        "--backfill-retrieval-limited",
+        action="store_true",
+        help=(
+            "Recompute criterion_scores.retrieval_limited from current DB state "
+            "(true = zero embedded document-sections for that country-criterion). "
+            "Run AFTER any scoring batch: new rows default to false and are NOT set "
+            "by the scorer, so this step must be re-run or they stay silently false. "
+            "No country arg required. Additive: touches only the retrieval_limited column."
+        ),
+    )
+    parser.add_argument(
         "--no-cache",
         action="store_true",
         help=(
@@ -1176,7 +1195,9 @@ Examples:
         # ------------------------------------------------------------------
         # Validate: country is required unless a no-country flag is set
         # ------------------------------------------------------------------
-        _no_country_flags = args.score_all or args.export_index
+        _no_country_flags = (
+            args.score_all or args.export_index or args.backfill_retrieval_limited
+        )
         if args.country is None and not _no_country_flags:
             logger.error(
                 "A country name is required unless you use --score-all or --export-index."
@@ -1325,7 +1346,7 @@ Examples:
                 db_writer.ensure_schema()
 
             reference_year = args.year if args.year else datetime.now().year
-            country_id, country_name_resolved, iso_code, info_env = (
+            country_id, country_name_resolved, iso_code, _ = (
                 _get_country_info_for_scoring(db_writer, dsn, args.country)
             )
             embedding_client = config.get_embedding_client()
@@ -1363,11 +1384,56 @@ Examples:
                     country_name=country_name_resolved,
                     country_code=iso_code,
                     reference_year=reference_year,
-                    information_environment=info_env,
                     skip_if_scored=config.pipeline.enable_caching,
                 )
                 _print_scoring_summary(f"{args.country} [{model_str}]", reference_year, _bm_scores)
 
+            db_writer.close()
+            sys.exit(0)
+
+        # ------------------------------------------------------------------
+        # --backfill-retrieval-limited: recompute the instrument-failure flag
+        # ------------------------------------------------------------------
+        if args.backfill_retrieval_limited:
+            if not dsn:
+                logger.error("--backfill-retrieval-limited requires DATABASE_URL to be set")
+                sys.exit(1)
+            if not db_writer:
+                db_writer = DatabaseWriter(dsn)
+                db_writer.ensure_schema()
+
+            import psycopg2 as _psycopg2_bf
+            _conn_bf = _psycopg2_bf.connect(dsn)
+            try:
+                with _conn_bf.cursor() as _cur_bf:
+                    # retrieval_limited = the document-retrieval instrument found zero
+                    # embedded, non-null sections for this country-criterion. Property
+                    # of the pipeline, not the country. Recomputed from scratch each run
+                    # (reset to false, then set true where the evidence is absent) so it
+                    # stays correct after new scores are added.
+                    _cur_bf.execute("UPDATE criterion_scores SET retrieval_limited = false;")
+                    _cur_bf.execute(
+                        """
+                        UPDATE criterion_scores cs SET retrieval_limited = true
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM documents d
+                            JOIN section_extractions se ON se.document_id = d.id
+                            WHERE d.country_id = cs.country_id
+                              AND cs.criterion_number = ANY(d.criteria_ids)
+                              AND se.all_null = false
+                              AND se.embedding IS NOT NULL
+                        )
+                        """
+                    )
+                    _n_limited = _cur_bf.rowcount
+                _conn_bf.commit()
+            finally:
+                _conn_bf.close()
+
+            print(
+                f"\n✅ retrieval_limited backfill complete — "
+                f"{_n_limited} criterion_scores row(s) flagged true"
+            )
             db_writer.close()
             sys.exit(0)
 
@@ -1386,6 +1452,47 @@ Examples:
 
             from src.core.index_aggregator import IndexAggregator
             aggregator = IndexAggregator(dsn=dsn, scoring_config=config.scoring)
+
+            # Aggregate per-country criterion_scores → country_index_scores.
+            # Without this step rank_countries()/export_index() only read rows that
+            # never got written, producing an empty index. Iterate every country that
+            # has at least one criterion_scores row for this reference_year.
+            import psycopg2 as _psycopg2_exp
+            import psycopg2.extras as _extras_exp
+            _conn_exp = _psycopg2_exp.connect(dsn)
+            try:
+                with _conn_exp.cursor(cursor_factory=_extras_exp.RealDictCursor) as _cur_exp:
+                    _cur_exp.execute(
+                        """
+                        SELECT DISTINCT country_id
+                        FROM criterion_scores
+                        WHERE reference_year = %s
+                        """,
+                        (reference_year,),
+                    )
+                    _index_country_ids = [r["country_id"] for r in _cur_exp.fetchall()]
+            finally:
+                _conn_exp.close()
+
+            if not _index_country_ids:
+                logger.warning(
+                    f"--export-index: no criterion_scores found for reference_year="
+                    f"{reference_year}; nothing to aggregate"
+                )
+                db_writer.close()
+                sys.exit(0)
+
+            logger.info(
+                f"--export-index: aggregating {len(_index_country_ids)} country(ies) "
+                f"for {reference_year}"
+            )
+            for _cid in _index_country_ids:
+                aggregator.compute_country_score(
+                    country_id=_cid,
+                    reference_year=reference_year,
+                    model_used=None,
+                )
+
             ranked = aggregator.rank_countries(reference_year=reference_year, model_used=None)
             out_path = aggregator.export_index(
                 reference_year=reference_year,
@@ -1448,7 +1555,7 @@ Examples:
 
             reference_year = args.year if args.year else datetime.now().year
 
-            country_id, country_name_resolved, iso_code, info_env = (
+            country_id, country_name_resolved, iso_code, _ = (
                 _get_country_info_for_scoring(db_writer, dsn, args.country)
             )
 
@@ -1470,7 +1577,6 @@ Examples:
                 country_name=country_name_resolved,
                 country_code=iso_code,
                 reference_year=reference_year,
-                information_environment=info_env,
                 skip_if_scored=config.pipeline.enable_caching,
             )
 
