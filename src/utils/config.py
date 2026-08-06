@@ -136,6 +136,7 @@ class Config:
         self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
         self.mistral_api_key = os.getenv("MISTRAL_API_KEY")
         self.serpapi_key = os.getenv("SERPAPI_KEY")
+        self._ollama_base_url_override = os.getenv("OLLAMA_BASE_URL")
 
         # Allow environment to override config path
         env_config_path = os.getenv("CONFIG_PATH")
@@ -159,6 +160,9 @@ class Config:
         self.logging = LoggingConfig(**config["logging"])
         self.extraction = ExtractionConfig(**config["extraction"])
         self.scoring = ScoringConfig(**config["scoring"])
+
+        if self._ollama_base_url_override:
+            self.scoring.ollama_base_url = self._ollama_base_url_override
 
         # Allow environment variable to override log level
         log_level = os.getenv("LOG_LEVEL")
