@@ -27,6 +27,49 @@ services:
       - ollama_data:/root/.ollama
     restart: unless-stopped
 
+  # Pull the embedding model once on startup
+  ollama-init:
+    image: ollama/ollama
+    container_name: dpi_ollama_init
+    depends_on:
+      - ollama
+    entrypoint: >
+      sh -c "sleep 5 && ollama pull nomic-embed-text"
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    restart: "no"
+
+  demo:
+    build: .
+    container_name: dpi_demo
+    ports:
+      - "8501:8501"
+    environment:
+      # Database (internal Docker network)
+      - DATABASE_URL=postgresql://dpi:dpi@db:5432/dpi
+      - DPI_DB_HOST=db
+      - DPI_DB_PORT=5432
+      - DPI_DB_NAME=dpi
+      - DPI_DB_USER=dpi
+      - DPI_DB_PASS=dpi
+      # Ollama (internal Docker network)
+      - OLLAMA_BASE_URL=http://ollama:11434
+      # API keys — set these in .env file
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - SERPAPI_KEY=${SERPAPI_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+    volumes:
+      # Persist pipeline cache and outputs across restarts
+      - dpi_pipeline_data:/app/data
+
 volumes:
   dpi_pgdata:
   ollama_data:
+  dpi_pipeline_data:
